@@ -1,0 +1,25 @@
+# Secrets - passed at runtime via env_file, never baked into the image
+.env
+
+# Virtualenvs / caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data (mounted as volumes instead)
+logs/*.log
+uploads/tickets/attachments/*
+static/uploads/*
+
+# Docker / VCS / IDE
+Dockerfile
+docker-compose*.yml
+.dockerignore
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
