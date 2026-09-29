@@ -1,0 +1,28 @@
+services:
+  niabot:
+    build: .
+    image: niabot:latest
+    container_name: niabot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      FLASK_DEBUG: "false"
+    ports:
+      - "5001:5001"
+    volumes:
+      - niabot_logs:/app/logs
+      - niabot_uploads:/app/uploads
+    # Lets the container reach MySQL / Typesense running on the host machine:
+    # set DB_HOST / TYPESENSE_HOST=host.docker.internal in .env for that case.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  niabot_logs:
+  niabot_uploads:

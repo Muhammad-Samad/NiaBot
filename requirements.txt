@@ -1,0 +1,22 @@
+# ─── Web framework ──────────────────────────────────────────────────────────
+flask>=3.0.0
+gunicorn>=21.2.0
+
+# ─── Config ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# ─── Database ───────────────────────────────────────────────────────────────
+mysql-connector-python>=8.3.0
+
+# ─── Shopping domain: search ────────────────────────────────────────────────
+typesense>=0.21.0
+requests>=2.31.0
+
+# ─── LLM providers (shopping + operations) ─────────────────────────────────
+openai>=1.82.0
+groq>=1.4.0
+google-genai>=0.3.0
+
+# ─── Retry/resilience (operations LLM failover) ────────────────────────────
+tenacity>=8.2.0
