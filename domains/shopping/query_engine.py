@@ -221,10 +221,14 @@ message unchanged):
   or an occasion/situation ("birthday party", "gym workout", "anniversary
   gift", "going to a water park"): return a comma-separated list of SPECIFIC
   product names, never broad category labels like "Grains" or "Dairy".
-  e.g. "breakfast" -> "Paratha, Farms Eggs, Honey, Bread, Butter, Oatmeal, Tea,
-  Coffee, Juice"; "birthday party" -> "cake, balloons, candles, paper plates,
+  e.g. "breakfast" -> "Paratha, Farms Eggs, Honey, Bread, Dairy Butter, Oatmeal, Tea,
+  Coffee, Juice"; "dairy products"->"milk,Yogurt,Farms Eggs,Dairy Butter,Cheese";
+  "birthday party" -> "happy birthday decor, cake, balloons, candles, paper plates,
   paper cups, streamers, chocolates"; "grocery" -> "salt, sugar, cooking oil, basmati rice,
   red chili powder, tea, milk, daal mash, noodles, tomatoes, onions etc...."
+  Food items whose bare name also matches non-food products (e.g. "Butter"
+  also matches body butter lotions) MUST carry a food qualifier: write
+  "Dairy Butter", never plain "Butter".
 - Gift-for-a-person request ("something for my wife", "gift for my husband",
   "anniversary gift for my dad", "present for my daughter"): return a
   comma-separated list of SPECIFIC gift product names suited to that

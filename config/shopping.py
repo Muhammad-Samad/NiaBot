@@ -20,6 +20,12 @@ TYPESENSE_API_KEY  = os.getenv("TYPESENSE_API_KEY")
 PRODUCTS_COLLECTION = os.getenv("TYPESENSE_PRODUCTS_COLLECTION", "magento_v1_default-products")
 CONV_MODEL_ID        = os.getenv("TYPESENSE_CONV_MODEL_ID", "naheed-shopping-model")
 
+# Category tree for the same store as PRODUCTS_COLLECTION (its doc ids are the
+# values in each product's category_ids) — used by search.py to keep
+# ambiguous items like "Butter" inside the right category (Dairy, not body
+# lotions). Must be the categories collection matching the products one.
+CATEGORIES_COLLECTION = os.getenv("TYPESENSE_CATEGORIES_COLLECTION", "npk_livedefault-categories")
+
 # Must match the "embedding" field's model_config.model_name / num_dim on
 # PRODUCTS_COLLECTION exactly (openai/text-embedding-3-small, 1536 dims) — see
 # search.py::embed_query_text. Queries are embedded ourselves and the raw

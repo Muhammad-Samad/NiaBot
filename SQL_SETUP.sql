@@ -105,3 +105,28 @@ CREATE TABLE `conversation_sessions` (
     CONSTRAINT `conversation_sessions_chk_1`
         CHECK (`status` IN ('active', 'closed', 'escalated'))
 )ENGINE=InnoDB;
+
+CREATE TABLE `chatbot_messages` (
+    `id` INT NOT NULL AUTO_INCREMENT,
+    `conversation_id` INT NOT NULL,
+    `sender` VARCHAR(50) NOT NULL COLLATE 'utf8mb4_unicode_ci',
+    `message` TEXT NOT NULL COLLATE 'utf8mb4_unicode_ci',
+    `message_type` VARCHAR(50) NULL DEFAULT NULL COLLATE 'utf8mb4_unicode_ci',
+    `intent` VARCHAR(255) NULL DEFAULT NULL COLLATE 'utf8mb4_unicode_ci',
+    `flow_name` VARCHAR(255) NULL DEFAULT NULL COLLATE 'utf8mb4_unicode_ci',
+    `confidence` FLOAT NULL DEFAULT NULL,
+    `metadata` JSON NULL DEFAULT NULL,
+    `timestamp` DATETIME NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (`id`),
+    INDEX `conversation_id` (`conversation_id`),
+    INDEX `timestamp` (`timestamp`),
+    INDEX `sender` (`sender`),
+
+    CONSTRAINT `chatbot_messages_ibfk_1`
+        FOREIGN KEY (`conversation_id`)
+        REFERENCES `conversation_sessions` (`id`)
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE
+)
+ENGINE=InnoDB;
