@@ -28,3 +28,9 @@ domains/policy/chroma/
 
 # Office lock files
 ~$*
+
+# Generated RAG index (rebuild with: python -m scripts.ingest_policy)
+domains/policy/chroma/
+
+# Office lock files
+~$*

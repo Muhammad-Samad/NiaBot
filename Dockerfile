@@ -29,11 +29,17 @@ EXPOSE 5001
 # rate limiter live in process memory, so multiple workers would split a
 # user's conversation across processes. Concurrency comes from threads.
 # Long timeout because LLM calls + the ~15s DB pool warm-up at import.
-CMD ["gunicorn", "app:app", \
-     "--bind", "0.0.0.0:5001", \
-     "--workers", "1", \
-     "--worker-class", "gthread", \
-     "--threads", "8", \
-     "--timeout", "120", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-"]
+#
+# The policy RAG index (domains/policy/chroma/) is built at container start,
+# not at build time: ingestion needs the OpenAI key from .env, which is only
+# available at runtime. A failed ingest is logged but doesn't stop the app -
+# shopping / operations keep working, only policy answers are affected.
+CMD ["sh", "-c", "python -m scripts.ingest_policy || echo 'WARNING: policy ingest failed - policy answers will be unavailable'; \
+     exec gunicorn app:app \
+     --bind 0.0.0.0:5001 \
+     --workers 1 \
+     --worker-class gthread \
+     --threads 8 \
+     --timeout 120 \
+     --access-logfile - \
+     --error-logfile -"]

@@ -23,3 +23,7 @@ docker-compose*.yml
 .idea/
 .DS_Store
 Thumbs.db
+
+# Policy RAG index - rebuilt inside the container at startup
+domains/policy/chroma/
+~$*
