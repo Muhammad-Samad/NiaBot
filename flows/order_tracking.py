@@ -104,7 +104,7 @@ class OrderTrackingFlow(BaseFlow):
                     state.verification_attempts = 0
                     return FlowResponse(
                         status="completed",
-                        response="We were unable to verify the provided phone number. I'm connecting you with a customer support representative for further assistance.",
+                        response="We were unable to verify the provided phone number. Please contact our Customer Support team at (021) 111-624-333 for further assistance.",
                         tool_request="agent_handoff"
                     )
                 else:

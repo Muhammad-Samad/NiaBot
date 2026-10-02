@@ -68,7 +68,7 @@ class ProviderHealth:
 
     def print_metrics(self):
         avg_latency = self.total_latency / self.request_count if self.request_count > 0 else 0
-        logger.info(f"Metrics for [{self.name}] (State: {self.state}): Requests={self.request_count}, Success={self.success_count}, Failures={self.failure_count}, Failovers={self.failover_count}, AvgLatency={avg_latency:.4f}s")
+        logger.debug(f"Metrics for [{self.name}] (State: {self.state}): Requests={self.request_count}, Success={self.success_count}, Failures={self.failure_count}, Failovers={self.failover_count}, AvgLatency={avg_latency:.4f}s")
 
 
 class LLMFactory:
@@ -138,11 +138,9 @@ class LLMFactory:
             
         start_time = time.time()
         try:
-            logger.info(f"Using {name.capitalize()} provider...")
             response = provider.generate_content(prompt, message_id=message_id)
             latency = time.time() - start_time
             stats.record_success(latency)
-            logger.info(f"{name.capitalize()} request successful.")
             stats.print_metrics()
             return response
             

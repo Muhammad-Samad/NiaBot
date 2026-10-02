@@ -61,7 +61,6 @@ class IntentParser:
         
         try:
             logger.debug(f"Requesting intent classification for message: '{user_message}' (Context: {'Yes' if context_block else 'No'})")
-            logger.info(f"IntentParser -> LLMFactory (message_id={message_id})")
             raw_response = self.factory.generate_content_with_failover(prompt, message_id=message_id)
             
             cleaned_json = self.clean_json_response(raw_response)

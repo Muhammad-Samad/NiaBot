@@ -49,13 +49,12 @@ class GeminiClient(BaseLLMClient):
         
         try:
             logger.debug(f"Sending request to Gemini API (Model: {model_name})")
-            logger.info(f"GeminiClient -> Gemini API (message_id={message_id})")
             response = self.client.models.generate_content(
                 model=model_name,
                 contents=prompt
             )
             latency = time.time() - start_time
-            logger.info(f"Gemini API request successful. Latency: {latency:.4f}s")
+            logger.debug(f"Gemini API request successful. Latency: {latency:.4f}s")
             
             if not response or not response.text:
                 raise LLMAPIError("Received empty or invalid response from Gemini API.", "gemini", 500, True)

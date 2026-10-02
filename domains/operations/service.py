@@ -20,6 +20,41 @@ def is_mid_flow(session_id: str) -> bool:
     return bool(state.current_flow)
 
 
+def get_resume_context(session_id: str):
+    """Returns (current_flow, last_assistant_message) so a turn answered by
+    another domain mid-flow (a policy question) can remind the customer
+    where this flow left off. Doesn't modify the operations state."""
+    state = _conversation_manager.state_manager.get_state(session_id)
+    return state.current_flow, state.last_assistant_message
+
+
+# Flow stages that are waiting for an order ID or a phone number. Every flow
+# just re-asks when the reply at one of these steps contains no digits.
+_IDENTIFIER_STAGES = {"waiting_for_order_id", "waiting_for_phone", "ask_order_id", "ask_verification"}
+
+
+def is_awaiting_identifier(session_id: str) -> bool:
+    """True when the current flow step is asking for an order ID / phone
+    number. A reply with no digits at all can't be the answer, so the router
+    resets the flow and treats that reply as a brand-new message."""
+    state = _conversation_manager.state_manager.get_state(session_id)
+    return bool(state.current_flow) and (
+        state.waiting_for_order_id or state.current_stage in _IDENTIFIER_STAGES
+    )
+
+
+def reset_flow(session_id: str) -> None:
+    """Drops whatever operations flow this session is in, exactly like the
+    customer typing "cancel" would (minus the reply)."""
+    _conversation_manager.state_manager.clear_state(session_id)
+
+
+def is_cancellation(message: str) -> bool:
+    """True for "cancel" / "reset" / "never mind" etc. - the operations reset
+    command, which must keep reaching operations."""
+    return _conversation_manager.state_manager.check_cancellation(message)
+
+
 def get_menu_stage(session_id: str):
     """Returns "main"/"policy" while a numbered menu is awaiting a reply for
     this session, else None. See router/menu.py."""

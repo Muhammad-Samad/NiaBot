@@ -85,9 +85,14 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     message             TEXT          NOT NULL,
     products_json       LONGTEXT      NULL,   -- JSON array of product cards (assistant only)
     cart_action_json    TEXT          NULL,   -- JSON cart action if any
+    domain              VARCHAR(32)   NULL,   -- domain that handled the turn: shopping / operations / policy / menu
     created_at          DATETIME      NOT NULL DEFAULT NOW(),
-    INDEX idx_session_conv (session_id, conversation_id)
+    INDEX idx_session_conv (session_id, conversation_id),
+    INDEX idx_domain (domain)
 ) ENGINE=InnoDB;
+
+-- If upgrading an existing install, run migrations/add_policy_domain_columns.sql
+-- (adds conversation_messages.domain and conversation_sessions.ended_at).
 
 CREATE TABLE `conversation_sessions` (
     `id` INT(10) NOT NULL AUTO_INCREMENT,
@@ -96,6 +101,7 @@ CREATE TABLE `conversation_sessions` (
     `summary` TEXT NULL DEFAULT NULL COLLATE 'utf8mb4_unicode_ci',
     `started_at` DATETIME NULL DEFAULT CURRENT_TIMESTAMP,
     `last_activity` DATETIME NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `ended_at` DATETIME NULL DEFAULT NULL,
     `status` VARCHAR(50) NULL DEFAULT 'active' COLLATE 'utf8mb4_unicode_ci',
 
     PRIMARY KEY (`id`),
@@ -106,6 +112,9 @@ CREATE TABLE `conversation_sessions` (
         CHECK (`status` IN ('active', 'closed', 'escalated'))
 )ENGINE=InnoDB;
 
+-- Operations and policy turns (intent, flow, confidence). For policy turns,
+-- flow_name = 'policy', intent = 'policy_query' and `metadata` holds the RAG
+-- details: {domain, entry, model, grounded, standalone_question, sources[]}.
 CREATE TABLE `chatbot_messages` (
     `id` INT NOT NULL AUTO_INCREMENT,
     `conversation_id` INT NOT NULL,

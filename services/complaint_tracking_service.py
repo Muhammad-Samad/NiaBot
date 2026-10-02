@@ -9,10 +9,10 @@ class ComplaintTrackingService:
         self.repository = tracking_repository or ComplaintTrackingRepository()
 
     def track_complaint(self, order_number: str) -> Dict[str, Any]:
-        logger.info(f"ComplaintTrackingService.track_complaint() executed for order_number={order_number}")
+        logger.debug(f"ComplaintTrackingService.track_complaint() executed for order_number={order_number}")
         try:
             results = self.repository.find_by_order(order_number=order_number)
-            logger.info(f"ComplaintTrackingService: repository returned {len(results)} rows for order {order_number}")
+            logger.debug(f"ComplaintTrackingService: repository returned {len(results)} rows for order {order_number}")
             
             if not results:
                 if self.repository.check_order_exists(order_number):

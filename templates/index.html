@@ -242,6 +242,8 @@
     border-bottom-right-radius: 4px;
   }
   .bubble.typing { color: var(--text-muted); font-style: italic; }
+  .bubble a { color: inherit; text-decoration: underline; word-break: break-all; }
+  .bubble.bot a { color: var(--brand-red); }
 
   /* Clickable numbered options inside a bot bubble (same look as the
      welcome menu). Once the user answers, the list is locked and the
@@ -1147,12 +1149,21 @@
   }
   function escapeAttr(s) { return String(s || '').replace(/"/g,'&quot;'); }
 
-  // Converts **bold** and *italic* markdown to HTML, then renders newlines
+  // Converts URLs to clickable links, **bold** and *italic* markdown to HTML,
+  // then renders newlines. Links are swapped out for placeholders first so the
+  // markdown rules can't mangle characters inside a URL.
+  const URL_RE = /\bhttps?:\/\/[^\s<]+[^\s<.,;:!?)\]'"]/g;
   function renderText(s) {
-    return escapeHtml(s)
+    const links = [];
+    const html = escapeHtml(s)
+      .replace(URL_RE, url => {
+        links.push(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+        return `\u0000${links.length - 1}\u0000`;
+      })
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
       .replace(/\n/g, '<br>');
+    return html.replace(/\u0000(\d+)\u0000/g, (_, i) => links[i]);
   }
 
   // ─── Page init: restore conversation history then cart ────────────────────

@@ -39,7 +39,7 @@ class ComplaintTrackingRepository:
             return [order_number]
 
     def find_by_order(self, order_number: str, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
-        logger.info(f"ComplaintTrackingRepository.find_by_order() called for order_number={order_number}")
+        logger.debug(f"ComplaintTrackingRepository.find_by_order() called for order_number={order_number}")
         
         family_ids = self.get_order_family(order_number)
         
@@ -65,7 +65,7 @@ class ComplaintTrackingRepository:
                 params = tuple(family_ids) + (limit, offset)
                 cursor.execute(query, params)
                 results = cursor.fetchall()
-                logger.info(f"ComplaintTrackingRepository.find_by_order() SQL returned {len(results)} rows for family {family_ids}.")
+                logger.debug(f"ComplaintTrackingRepository.find_by_order() SQL returned {len(results)} rows for family {family_ids}.")
                 cursor.close()
                 return results
         except Exception as e:

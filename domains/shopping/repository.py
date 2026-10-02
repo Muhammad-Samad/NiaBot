@@ -14,6 +14,9 @@ import uuid
 from datetime import datetime
 
 from database.connection import DatabaseManager
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def to_json_safe(val):
@@ -44,16 +47,18 @@ def ensure_cart_session(sid, conversation_id=None):
         cur.close()
 
 
-def save_conversation_message(sid, conversation_id, role, message, products=None, cart_action=None):
-    """Persist one chat turn (user or assistant), from EITHER domain, so
-    /api/history can restore the full unified chat UI on page reload."""
+def save_conversation_message(sid, conversation_id, role, message, products=None, cart_action=None, domain=None):
+    """Persist one chat turn (user or assistant), from ANY domain, so
+    /api/history can restore the full unified chat UI on page reload.
+    `domain` is the domain that handled the turn (shopping / operations /
+    policy / menu)."""
     try:
         with DatabaseManager() as conn:
             cur = conn.cursor()
             cur.execute(
                 """INSERT INTO conversation_messages
-                       (session_id, conversation_id, role, message, products_json, cart_action_json)
-                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                       (session_id, conversation_id, role, message, products_json, cart_action_json, domain)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                 (
                     sid,
                     conversation_id,
@@ -61,6 +66,7 @@ def save_conversation_message(sid, conversation_id, role, message, products=None
                     message,
                     json.dumps(products) if products else None,
                     json.dumps(cart_action) if cart_action else None,
+                    domain,
                 ),
             )
             conn.commit()
@@ -68,7 +74,7 @@ def save_conversation_message(sid, conversation_id, role, message, products=None
     except Exception as e:
         # Logging is best-effort — never let a history-write failure break the
         # actual chat response the user is waiting on.
-        print(f"[save_conversation_message] Error: {e}")
+        logger.error(f"Failed to save conversation message for session {sid}: {e}")
 
 
 def get_history(sid):

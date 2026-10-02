@@ -25,7 +25,7 @@ class AgentHandoffFlow(BaseFlow):
         
         return FlowResponse(
             status="completed",
-            response="I'm connecting you to a customer support representative who can assist you further. Please wait a moment.",
+            response="For further assistance, please contact our Customer Support team at (021) 111-624-333.",
             tool_request="agent_handoff"
         )
 

@@ -10,7 +10,6 @@ class ConversationRepository:
         """
         Retrieves the most recent session for a given session_id.
         """
-        logger.info("ENTER get_session")
         try:
             with DatabaseManager() as conn:
                 cursor = conn.cursor(dictionary=True)
@@ -20,7 +19,6 @@ class ConversationRepository:
                 )
                 result = cursor.fetchone()
                 cursor.close()
-                logger.info("EXIT get_session")
                 return result
         except Exception as e:
             logger.exception(f"[ConversationRepository] Failed to get session {session_id}: {e}")
@@ -30,7 +28,6 @@ class ConversationRepository:
         """
         Creates a new session and returns its internal ID.
         """
-        logger.info("ENTER create_session")
         try:
             insert_query = """
             INSERT IGNORE INTO conversation_sessions (session_id, customer_identifier)
@@ -46,8 +43,6 @@ class ConversationRepository:
                 internal_id = result[0] if result else None
                 
                 cursor.close()
-                logger.info(f"returned new conversation_id={internal_id}")
-                logger.info("EXIT create_session")
                 return internal_id
         except Exception as e:
             logger.exception(f"[ConversationRepository] Failed to create session {session_id}: {e}")
@@ -57,7 +52,6 @@ class ConversationRepository:
         """
         Marks the active session as closed.
         """
-        logger.info("ENTER close_session")
         try:
             query = """
             UPDATE conversation_sessions 
@@ -72,7 +66,6 @@ class ConversationRepository:
                 logger.info(f"Successfully closed session {session_id}")
         except Exception as e:
             logger.exception(f"[ConversationRepository] Failed to close session {session_id}: {e}")
-        logger.info("EXIT close_session")
 
     def update_last_activity(self, session_id: str):
         try:
@@ -101,7 +94,6 @@ class ConversationRepository:
         Saves a message to the conversation_messages table.
         Logs and swallows exceptions.
         """
-        logger.info("ENTER save_message")
         try:
             metadata_json = json.dumps(metadata) if metadata else None
             
@@ -112,18 +104,14 @@ class ConversationRepository:
             """
             with DatabaseManager() as conn:
                 cursor = conn.cursor()
-                logger.info("executing INSERT")
                 cursor.execute(insert_query, (
                     conversation_id, sender, message, message_type, 
                     intent, flow_name, confidence, metadata_json
                 ))
-                logger.info(f"INSERT affected {cursor.rowcount} rows")
                 conn.commit()
-                logger.info("commit successful")
                 cursor.close()
         except Exception as e:
             logger.exception(f"[ConversationRepository] Failed to save message for conversation {conversation_id}: {e}")
-        logger.info("EXIT save_message")
 
     def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
         try:

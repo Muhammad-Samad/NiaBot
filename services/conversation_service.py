@@ -37,7 +37,6 @@ class ConversationService:
         Saves a user message. Non-critical feature; dispatched to background thread.
         """
         def _task():
-            logger.info(f"ENTER save_user_message\nsession_id={session_id}")
             try:
                 internal_id = self.get_or_create_session(session_id, customer_identifier)
                 if internal_id is not None:
@@ -54,7 +53,6 @@ class ConversationService:
                     self.repository.update_last_activity(session_id)
             except Exception as e:
                 logger.exception(f"[ConversationService] Exception saving user message for session {session_id}: {e}")
-            logger.info("EXIT save_user_message")
 
         _executor.submit(_task)
 

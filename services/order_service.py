@@ -27,7 +27,7 @@ class OrderService:
         return mapping.get(carrier_code.lower())
 
     def track_order(self, increment_id: str) -> Dict[str, Any]:
-        logger.info(f"OrderService received tracking request for ID: {increment_id}")
+        logger.debug(f"OrderService received tracking request for ID: {increment_id}")
         
         # 1. Validate Order ID
         if not increment_id or not isinstance(increment_id, str) or not increment_id.strip():
@@ -56,7 +56,7 @@ class OrderService:
         try:
             parent_order = self.repository.get_order_by_increment_id(increment_id)
             duration_ms = int((time.time() - start_time) * 1000)
-            logger.info(f"Order fetch for {increment_id} took {duration_ms}ms")
+            logger.debug(f"Order fetch for {increment_id} took {duration_ms}ms")
 
             self.audit_service.log_event(
                 event_type=AuditEvent.ORDER_TRACKING,
@@ -70,30 +70,30 @@ class OrderService:
             # Select active order (child if exists, else parent)
             if parent_order.child_orders:
                 active_order = next((c for c in parent_order.child_orders if c.increment_id == increment_id), parent_order.child_orders[0])
-                logger.info(f"Using active child order {active_order.increment_id} for tracking.")
+                logger.debug(f"Using active child order {active_order.increment_id} for tracking.")
             else:
                 active_order = parent_order
             
             # 4. Handle exact DB status and ETA
             eta_str = None
             if active_order.estimated_delivery_datetime:
-                logger.info(f"ETA found: {active_order.estimated_delivery_datetime}")
+                logger.debug(f"ETA found: {active_order.estimated_delivery_datetime}")
                 if active_order.estimated_delivery_datetime > datetime.now():
-                    logger.info("ETA valid.")
+                    logger.debug("ETA valid.")
                     eta_str = active_order.estimated_delivery_datetime.strftime("%d %B %Y, %I:%M %p")
                 else:
-                    logger.info("ETA expired.")
+                    logger.debug("ETA expired.")
             else:
-                logger.info("No ETA found.")
+                logger.debug("No ETA found.")
             
-            logger.info(f"Exact DB status returned: {active_order.status}")
+            logger.debug(f"Exact DB status returned: {active_order.status}")
             
             # External Order Detection
             is_external = False
             if active_order.shipping_city and active_order.shipping_city.strip().lower() != "karachi":
                 is_external = True
                 
-            logger.info(f"Order type: {'External' if is_external else 'Karachi'}")
+            logger.debug(f"Order type: {'External' if is_external else 'Karachi'}")
 
             status_label = self.repository.get_status_label(active_order.status)
             
@@ -111,7 +111,7 @@ class OrderService:
                 
             has_unavailable = bool(parent_order.unavailable_items)
             if has_unavailable:
-                logger.info(f"Formatting {len(parent_order.unavailable_items)} unavailable items.")
+                logger.debug(f"Formatting {len(parent_order.unavailable_items)} unavailable items.")
                 lines.append("\nUnavailable Items:")
                 for item in parent_order.unavailable_items:
                     qty = item['qty']
@@ -230,7 +230,7 @@ class OrderService:
             }
 
     def check_order_modifiable(self, increment_id: str) -> Dict[str, Any]:
-        logger.info(f"OrderService received modifiability check for ID: {increment_id}")
+        logger.debug(f"OrderService received modifiability check for ID: {increment_id}")
         
         # 1. Validate Order ID
         if not increment_id or not isinstance(increment_id, str) or not increment_id.strip():
@@ -272,10 +272,10 @@ class OrderService:
                 return {
                     "success": True,
                     "modifiable": True,
-                    "message": f"Your order #{increment_id} is currently in '{status_label}' status and can be modified. What would you like to add or remove in your order? Connecting you to a live agent to modify it..."
+                    "message": f"Your order #{increment_id} is currently in '{status_label}' status and can be modified. To add or remove items, please contact our Customer Support team at (021) 111-624-333."
                 }
         except OrderNotFoundError:
-            logger.info(f"OrderService: Order {increment_id} not found for modifiability check.")
+            logger.debug(f"OrderService: Order {increment_id} not found for modifiability check.")
             return {
                 "success": False,
                 "modifiable": False,

@@ -83,7 +83,6 @@ class OpenAIClient(BaseLLMClient):
         
         try:
             logger.debug(f"Sending request to OpenAI API (Model: {model_name})")
-            logger.info(f"OpenAIClient -> OpenAI API (message_id={message_id})")
             
             response = self.client.chat.completions.create(
                 model=model_name,
@@ -101,7 +100,7 @@ class OpenAIClient(BaseLLMClient):
             usage = getattr(response, "usage", None)
             details = getattr(usage, "prompt_tokens_details", None) if usage else None
             if usage:
-                logger.info(f"OpenAI prompt tokens: {usage.prompt_tokens} (cached: {getattr(details, 'cached_tokens', 0) or 0})")
+                logger.debug(f"OpenAI prompt tokens: {usage.prompt_tokens} (cached: {getattr(details, 'cached_tokens', 0) or 0})")
 
             return response.choices[0].message.content
             

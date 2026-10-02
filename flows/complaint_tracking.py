@@ -43,7 +43,7 @@ class ComplaintTrackingFlow(BaseFlow):
             match = re.search(r'\b\d{5,15}\b', last_message)
             if match:
                 order_id = match.group(0)
-                logger.info(f"ComplaintTrackingFlow: extracted order_id '{order_id}' via regex fallback.")
+                logger.debug(f"ComplaintTrackingFlow: extracted order_id '{order_id}' via regex fallback.")
         return order_id
 
     def _reset(self, state: ConversationState):
@@ -53,7 +53,7 @@ class ComplaintTrackingFlow(BaseFlow):
         state.verification_attempts = 0
 
     def handle(self, intent_result: IntentResult, state: ConversationState) -> FlowResponse:
-        logger.info("ComplaintTrackingFlow.handle() executed")
+        logger.debug("ComplaintTrackingFlow.handle() executed")
 
         # Initialize flow if needed
         if state.current_flow != "complaint_tracking":
@@ -63,9 +63,9 @@ class ComplaintTrackingFlow(BaseFlow):
 
         if state.current_stage == "ask_order_id":
             order_id = self._extract_order_id(intent_result, state)
-            logger.info(f"ComplaintTrackingFlow: received order_id={order_id}")
+            logger.debug(f"ComplaintTrackingFlow: received order_id={order_id}")
             if not order_id:
-                logger.info("ComplaintTrackingFlow: Order Number is missing. Prompting user.")
+                logger.debug("ComplaintTrackingFlow: Order Number is missing. Prompting user.")
                 state.waiting_for_order_id = True
                 return FlowResponse(
                     response="Please provide your Order Number.",
@@ -112,7 +112,7 @@ class ComplaintTrackingFlow(BaseFlow):
                 self._reset(state)
                 return FlowResponse(
                     status="completed",
-                    response="We were unable to verify the provided phone number. I'm connecting you with a customer support representative for further assistance.",
+                    response="We were unable to verify the provided phone number. Please contact our Customer Support team at (021) 111-624-333 for further assistance.",
                     tool_request="agent_handoff"
                 )
             return FlowResponse(
@@ -126,7 +126,7 @@ class ComplaintTrackingFlow(BaseFlow):
         return FlowResponse(status="waiting_for_input", response="Please provide your Order Number.")
 
     def _track(self, order_id: str, state: ConversationState) -> FlowResponse:
-        logger.info(f"ComplaintTrackingFlow: continuing with order_id={order_id}")
+        logger.debug(f"ComplaintTrackingFlow: continuing with order_id={order_id}")
         self._reset(state)
         return FlowResponse(
             response="",  # ConversationManager will handle appending the service response

@@ -16,7 +16,8 @@ reprompting after an invalid number.
 Two levels, both driven by domains/operations/service.py's per-session
 `awaiting_menu` flag ("main" or "policy"), consumed by router/domain_router.py:
   - Main menu: order operations + an entry into the Policy/FAQ sub-menu.
-  - Policy sub-menu: the topics in flows/knowledge_base.py's GENERAL_POLICY_KB.
+  - Policy sub-menu: policy topics, each answered by the policy domain
+    (domains/policy, ChromaDB RAG) by asking it that topic's question.
 """
 
 import re
@@ -56,15 +57,15 @@ MAIN_MENU = [
 # Number of the entry that opens the Policy/FAQ sub-menu.
 POLICY_SUBMENU_CHOICE = next(n for n, _label, intent in MAIN_MENU if intent is None)
 
-# (number, label, GENERAL_POLICY_KB key)
+# (number, label, question asked of the policy domain)
 POLICY_MENU = [
-    (1, "Delivery & Shipping", "delivery"),
-    (2, "Payment Methods", "payment"),
-    (3, "OTP Verification", "otp"),
-    (4, "Loyalty Program", "loyalty"),
-    (5, "Return Policy", "returns"),
-    (6, "Warranty Policy", "warranty"),
-    (7, "Company Information", "company"),
+    (1, "Delivery & Shipping", "What are Naheed.pk's delivery and shipping options, charges and delivery times?"),
+    (2, "Payment Methods", "What payment methods does Naheed.pk accept?"),
+    (3, "OTP Verification", "How does OTP verification work, and what should I do if I don't receive the OTP?"),
+    (4, "Loyalty Program", "How does the Naheed loyalty program work?"),
+    (5, "Return Policy", "What is Naheed.pk's return policy?"),
+    (6, "Warranty Policy", "What is Naheed.pk's warranty policy?"),
+    (7, "Company Information", "Tell me about Naheed and Naheed.pk."),
 ]
 
 
@@ -79,7 +80,7 @@ def format_main_menu() -> str:
 
 def format_policy_menu() -> str:
     lines = ["Please choose a topic (reply with a number):"]
-    for number, label, _topic in POLICY_MENU:
+    for number, label, _question in POLICY_MENU:
         lines.append(f"{number}. {label}")
     lines.append("")
     lines.append("Type 'menu' to go back to the main menu.")
@@ -105,8 +106,8 @@ def resolve_main_selection(choice: int) -> Tuple[Optional[str], Optional[str]]:
 
 
 def resolve_policy_selection(choice: int) -> Optional[str]:
-    """Returns the GENERAL_POLICY_KB topic key for `choice`, else None."""
-    for number, _label, topic in POLICY_MENU:
+    """Returns the policy-domain question for `choice`, else None."""
+    for number, _label, question in POLICY_MENU:
         if number == choice:
-            return topic
+            return question
     return None

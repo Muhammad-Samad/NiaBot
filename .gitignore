@@ -22,3 +22,9 @@ static/uploads/*
 # OS
 .DS_Store
 Thumbs.db
+
+# Generated RAG index (rebuild with scripts/ingest_policy.py)
+domains/policy/chroma/
+
+# Office lock files
+~$*

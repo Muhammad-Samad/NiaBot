@@ -40,7 +40,6 @@ class GroqClient(BaseLLMClient):
         
         try:
             logger.debug(f"Sending request to Groq API (Model: {model_name})")
-            logger.info(f"GroqClient -> Groq API (message_id={message_id})")
             
             chat_completion = self.client.chat.completions.create(
                 messages=[
@@ -54,7 +53,7 @@ class GroqClient(BaseLLMClient):
             )
             
             latency = time.time() - start_time
-            logger.info(f"Groq API request successful. Latency: {latency:.4f}s")
+            logger.debug(f"Groq API request successful. Latency: {latency:.4f}s")
             
             return chat_completion.choices[0].message.content
             

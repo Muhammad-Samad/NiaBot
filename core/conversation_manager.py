@@ -75,8 +75,6 @@ class ConversationManager:
         request_id_var.set(message_id)
         session_id_var.set(session_id)
         
-        logger.info(f"\n[REQUEST START]\nmessage_id={message_id}\nuser_message={message}")
-        
         # Log session started if this is a new session
         state = self.state_manager.get_state(session_id)
         if not state.conversation_history:
@@ -128,20 +126,16 @@ class ConversationManager:
             )
             logger.warning(f"User message rejected: exceeded word limit of {word_limit} words.")
             response_text = f"Your message is too long. Please limit your message to {word_limit} words."
-            logger.info("ENTER ConversationManager persistence")
             self.conversation_service.save_user_message(session_id, message)
             self.conversation_service.save_bot_message(session_id, response_text)
-            logger.info("EXIT ConversationManager persistence")
             return response_text, {}
             
         # 0.1 Check Cancellation of the current workflow
         if self.state_manager.check_cancellation(message):
             self.state_manager.clear_state(session_id)
             response_text = "Conversation reset. How can I help you?"
-            logger.info("ENTER ConversationManager persistence")
             self.conversation_service.save_user_message(session_id, message, intent="cancel")
             self.conversation_service.save_bot_message(session_id, response_text)
-            logger.info("EXIT ConversationManager persistence")
             return response_text, {}
             
         # 0.1 Check Consecutive User Messages
@@ -156,49 +150,13 @@ class ConversationManager:
             )
             logger.warning(f"Consecutive user message blocked for session {session_id}")
             response_text = "Please wait for my response before sending another message."
-            logger.info("ENTER ConversationManager persistence")
             self.conversation_service.save_user_message(session_id, message)
             self.conversation_service.save_bot_message(session_id, response_text)
-            logger.info("EXIT ConversationManager persistence")
             return response_text, {}
             
         # 0.5 Load State & add user message
         self.state_manager.add_message(session_id, "user", message)
         state = self.state_manager.get_state(session_id)
-        
-        # Check for pending confirmation (Escalation Handoff Interception)
-        if getattr(state, "pending_confirmation", None) == "agent_handoff":
-            msg_clean = message.strip().lower().rstrip('.!?')
-            affirmative_words = {"yes", "haan", "ji", "okay", "sure", "y", "yes please", "haan please"}
-            import re
-            is_affirmative = msg_clean in affirmative_words or any(re.search(r'\b' + re.escape(w) + r'\b', msg_clean) for w in affirmative_words)
-            
-            if is_affirmative:
-                state.handoff_pending = True
-                state.pending_confirmation = None
-                response_text = "I'm connecting you to a customer support representative who can assist you further. Please wait a moment."
-                self.state_manager.add_message(session_id, "assistant", response_text)
-                
-                logger.info("ENTER ConversationManager persistence")
-                self.conversation_service.save_user_message(session_id, message, intent="agent_handoff")
-                self.conversation_service.save_bot_message(session_id, response_text)
-                logger.info("EXIT ConversationManager persistence")
-                
-                return response_text, {
-                    "intent": "agent_handoff",
-                    "confidence": 1.0,
-                    "entities": {},
-                    "priority": state.priority,
-                    "mood": state.mood,
-                    "used_fallback_router": False,
-                    "llm_error": None,
-                    "flow_status": "completed",
-                    "tool_request": "agent_handoff",
-                    "tool_args": {},
-                    "raw_json": {}
-                }
-            else:
-                state.pending_confirmation = None
         
         # 1. Classify Intent via LLM (skipped entirely for a deterministic
         # numbered-menu selection, which arrives here as forced_intent - see
@@ -212,15 +170,14 @@ class ConversationManager:
             fast_path = self._order_tracking_fast_path(message, state)
             if fast_path:
                 forced_intent, forced_entities = fast_path
-                logger.info(f"Skipping LLM: message is the input order tracking is waiting for (stage={state.current_stage})")
+                logger.debug(f"Skipping LLM: message is the input order tracking is waiting for (stage={state.current_stage})")
 
         if forced_intent:
             intent_result = SchemaIntentResult(intent=forced_intent, confidence=1.0, entities=forced_entities or {})
-            logger.info(f"Predetermined intent: {forced_intent}")
+            logger.debug(f"Predetermined intent: {forced_intent}")
         else:
             start_time = time.time()
             try:
-                logger.info(f"ConversationManager -> IntentParser (message_id={message_id})")
                 ai_result = self.parser.parse_intent(message, state=state, message_id=message_id)
                 duration_ms = int((time.time() - start_time) * 1000)
 
@@ -238,13 +195,13 @@ class ConversationManager:
                     )
 
                     if getattr(intent_result, "tool", None):
-                        logger.info(f"AI Recommended Tool: {intent_result.tool}")
+                        logger.debug(f"AI Recommended Tool: {intent_result.tool}")
                 else:
                     logger.warning(f"Fallback Reason: Low AI confidence ({ai_result.confidence} < {self.confidence_threshold})")
             except IntentParserError as e:
                 duration_ms = int((time.time() - start_time) * 1000)
                 llm_error = str(e)
-                logger.info("Gemini unavailable.")
+                logger.warning(f"Intent parser unavailable: {llm_error}")
 
                 self.audit_service.log_event(
                     event_type=AuditEvent.LLM_INTERACTION,
@@ -259,11 +216,9 @@ class ConversationManager:
             # 1.5 Fallback to rule-based router
             if not intent_result:
                 used_fallback_router = True
-                logger.info("Switching to legacy router.")
+                logger.warning("Switching to legacy rule-based router.")
                 try:
                     intent_result = self.router.route(message)
-                    if intent_result:
-                        logger.info("Legacy router successfully classified intent.")
                 except Exception as e:
                     logger.error(f"Legacy router crashed: {e}")
                     intent_result = None
@@ -273,11 +228,8 @@ class ConversationManager:
                     state.consecutive_unknown_count += 1
                     response_text = "I'm having trouble understanding your request. Please try again."
                     self.state_manager.add_message(session_id, "assistant", response_text)
-                    logger.info(f"[REQUEST END] message_id={message_id}\n")
-                    logger.info("ENTER ConversationManager persistence")
                     self.conversation_service.save_user_message(session_id, message, intent="unknown")
                     self.conversation_service.save_bot_message(session_id, response_text)
-                    logger.info("EXIT ConversationManager persistence")
                     return response_text, {"error": "Routing failed."}
         # Update entities in state
         if intent_result:
@@ -289,7 +241,7 @@ class ConversationManager:
             priority = getattr(intent_result, "priority", "low") or "low"
             mood = getattr(intent_result, "mood", "happy") or "happy"
             self.state_manager.update_state(session_id, {"priority": priority, "mood": mood})
-            logger.info(f"Judged customer priority={priority}, mood={mood} (message_id={message_id})")
+            logger.debug(f"Judged customer priority={priority}, mood={mood} (message_id={message_id})")
 
         state = self.state_manager.get_state(session_id)
         
@@ -305,7 +257,6 @@ class ConversationManager:
             state.handoff_pending = True
             intent_result.intent = "agent_handoff"
         elif action == "offer_escalation":
-            state.pending_confirmation = "agent_handoff"
             should_offer_escalation = True
         
         # 2. Execute Flow via FlowManager
@@ -338,14 +289,22 @@ class ConversationManager:
         response_text = flow_response.response
         
         # TEMPORARY TOOL EXECUTION (To be replaced by Tool Dispatcher in Phase 5)
-        if flow_response.tool_request == "track_order":
+        bot_metadata = None
+        if flow_response.tool_request == "policy_rag":
+            # Policy questions are answered by the policy domain (ChromaDB
+            # RAG). Imported here to keep operations importable on its own.
+            from domains.policy import service as policy_service
+            policy_reply = policy_service.ask(session_id, flow_response.tool_args.get("question") or message, entry="operations_intent")
+            response_text = policy_reply["answer"]
+            bot_metadata = policy_reply["metadata"]
+        elif flow_response.tool_request == "track_order":
             order_id = flow_response.tool_args.get("order_id")
-            logger.info(f"Routing to OrderService for Order ID: {order_id}")
+            logger.debug(f"Routing to OrderService for Order ID: {order_id}")
             service_response = self.order_service.track_order(order_id)
             response_text = service_response.get("message", "We encountered an issue checking your order.")
         elif flow_response.tool_request == "modify_order":
             order_id = flow_response.tool_args.get("order_id")
-            logger.info(f"Routing to OrderService for Order ID: {order_id} (modify)")
+            logger.debug(f"Routing to OrderService for Order ID: {order_id} (modify)")
             service_response = self.order_service.check_order_modifiable(order_id)
             response_text = service_response.get("message", "We encountered an issue checking your order status.")
             if not service_response.get("success"):
@@ -355,17 +314,17 @@ class ConversationManager:
                 })
         elif flow_response.tool_request == "track_complaint":
             order_id = flow_response.tool_args.get("order_no")
-            logger.info(f"Routing to ComplaintTrackingService for Order ID: {order_id}")
+            logger.debug(f"Routing to ComplaintTrackingService for Order ID: {order_id}")
             service_response = self.complaint_tracking_service.track_complaint(order_id)
             response_text = service_response.get("message", "We encountered an issue checking your complaint status.")
             num_complaints = len(service_response.get("complaints", [])) if service_response.get("success") else 0
-            logger.info(f"ComplaintTrackingService found {num_complaints} complaints for order: {order_id}")
+            logger.debug(f"ComplaintTrackingService found {num_complaints} complaints for order: {order_id}")
         elif flow_response.tool_request == "create_complaint":
             order_id = flow_response.tool_args.get("order_id")
             complaint_type = flow_response.tool_args.get("complaint_type")
             details = flow_response.tool_args.get("details")
             image_url = flow_response.tool_args.get("image_url")
-            logger.info(f"Routing to ComplaintService for Order ID: {order_id} (priority={state.priority}, mood={state.mood})")
+            logger.debug(f"Routing to ComplaintService for Order ID: {order_id} (priority={state.priority}, mood={state.mood})")
             service_response = self.complaint_service.create_complaint(
                 order_id=order_id,
                 complaint_type=complaint_type,
@@ -387,16 +346,15 @@ class ConversationManager:
             if not service_response.get("success", True):
                 state.consecutive_failure_count += 1
                 if state.consecutive_failure_count >= 2:
-                    state.pending_confirmation = "agent_handoff"
                     should_offer_escalation = True
             else:
                 state.consecutive_failure_count = 0
 
         # Append escalation offer if needed
-        if should_offer_escalation or (getattr(state, "pending_confirmation", None) == "agent_handoff"):
-            offer_text = "Would you like me to connect you with one of our customer support representatives?"
+        if should_offer_escalation:
+            offer_text = "For further assistance, please contact our Customer Support team at (021) 111-624-333."
             if getattr(intent_result, "escalation_reason", None) == "customer_frustration" or (state.mood == "sad") or "frustrat" in message.lower():
-                offer_text = "I understand this has been frustrating. Would you like me to connect you with one of our customer support representatives?"
+                offer_text = "I understand this has been frustrating. Please contact our Customer Support team at (021) 111-624-333 and they will be happy to help you."
             
             if response_text:
                 if offer_text not in response_text:
@@ -414,7 +372,6 @@ class ConversationManager:
 
         self.state_manager.add_message(session_id, "assistant", response_text)
 
-        logger.info(f"[REQUEST END] message_id={message_id}\n")
         
         entities_dict = {}
         if intent_result:
@@ -448,7 +405,6 @@ class ConversationManager:
         # Save messages to database via ConversationService
         flow_name = state.current_flow if state and getattr(state, 'current_flow', None) else None
         
-        logger.info("ENTER ConversationManager persistence")
         self.conversation_service.save_user_message(
             session_id=session_id,
             message=message,
@@ -458,9 +414,9 @@ class ConversationManager:
         )
         self.conversation_service.save_bot_message(
             session_id=session_id,
-            message=response_text
+            message=response_text,
+            metadata=bot_metadata
         )
-        logger.info("EXIT ConversationManager persistence")
         
         # Finally, if the session was marked for termination, close it
         if getattr(flow_response, "end_conversation", False):

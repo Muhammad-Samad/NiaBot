@@ -88,11 +88,29 @@ class ComplaintFlow(BaseFlow):
         self.order_repository = order_repository or OrderRepository()
         self.complaint_repository = complaint_repository or ComplaintRepository()
 
+    # Stages where the complaint hasn't really started yet - it's still asking
+    # who the customer is. A clear request for another operations flow here
+    # ("track my order" while being asked for the order ID) means the customer
+    # changed their mind, so the complaint gives way to it.
+    _EARLY_STAGES = {"waiting_for_order_id", "waiting_for_phone"}
+    _SWITCH_INTENTS = {"order_tracking", "cancel_order", "complaint_tracking", "modify_order", "refund"}
+
     def is_continuation(self, intent_result: IntentResult, state: ConversationState) -> bool:
-        # Once a complaint is in progress (current_stage is set), every subsequent
-        # message is an answer to the current step (order ID, description, image upload,
-        # resolution, or details) - never a fresh request.
-        return state.current_stage is not None
+        if state.current_stage is None:
+            return False
+        # An explicit request for a human always wins, at any step.
+        if intent_result.intent == "agent_handoff":
+            return False
+        if state.current_stage in self._EARLY_STAGES and intent_result.intent in self._SWITCH_INTENTS:
+            # ...unless the message is the order ID / phone number being asked
+            # for (the rule-based fallback router labels a bare order ID as
+            # order_tracking).
+            user_msg = state.conversation_history[-1]["content"] if state.conversation_history else ""
+            return bool(re.search(r"\d{5,}", re.sub(r"[\s\-]", "", user_msg)))
+        # From the complaint menu onwards every message is an answer to the
+        # current step (complaint type, description, image upload, resolution)
+        # - descriptions naturally mention "late", "refund", "my order", etc.
+        return True
 
     def handle(self, intent_result: IntentResult, state: ConversationState) -> FlowResponse:
         # Retrieve raw user message from conversation history
@@ -213,7 +231,7 @@ class ComplaintFlow(BaseFlow):
                     state.verification_attempts = 0
                     return FlowResponse(
                         status="completed",
-                        response="We were unable to verify the provided phone number. I'm connecting you with a customer support representative for further assistance.",
+                        response="We were unable to verify the provided phone number. Please contact our Customer Support team at (021) 111-624-333 for further assistance.",
                         tool_request="agent_handoff"
                     )
                 else:

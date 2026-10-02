@@ -168,7 +168,7 @@ class CancelOrderFlow(BaseFlow):
                 state.verification_attempts = 0
                 return FlowResponse(
                     status="completed",
-                    response="Your order has already entered fulfillment and cannot be cancelled automatically. Please contact to Customer Support team at (021) 111-624-333 for assistance.",
+                    response="Your order has already entered fulfillment and cannot be cancelled automatically. Please contact our Customer Support team at (021) 111-624-333 for assistance.",
                     tool_request="agent_handoff"
                 )
             # dealing prepaid orders 
@@ -219,7 +219,7 @@ class CancelOrderFlow(BaseFlow):
                     state.verification_attempts = 0
                     return FlowResponse(
                         status="completed",
-                        response="We were unable to verify the provided phone number. Please contact to customer support representative for assistance. ((021) 111-624-333)",
+                        response="We were unable to verify the provided phone number. Please contact our Customer Support team at (021) 111-624-333 for further assistance.",
                         tool_request="agent_handoff"
                     )
                 else:
@@ -236,7 +236,7 @@ class CancelOrderFlow(BaseFlow):
                 state.verification_attempts = 0
                 return FlowResponse(
                     status="completed",
-                    response="I understand. Please contact to customer support representative who can assist you with this request.",
+                    response="I understand. Please contact our Customer Support team at (021) 111-624-333 and they will assist you with this request.",
                     tool_request="agent_handoff"
                 )
 
@@ -325,7 +325,7 @@ class CancelOrderFlow(BaseFlow):
                 state.verification_attempts = 0
                 return FlowResponse(
                     status="completed",
-                    response="I understand. I am connecting you to a customer support representative who can assist you with this request.",
+                    response="I understand. Please contact our Customer Support team at (021) 111-624-333 and they will assist you with this request.",
                     tool_request="agent_handoff"
                 )
 
@@ -353,5 +353,5 @@ class CancelOrderFlow(BaseFlow):
         state.verification_attempts = 0
         return FlowResponse(
             status="completed",
-            response="I am connecting you to a representative."
+            response="Sorry, I couldn't complete your request. Please contact our Customer Support team at (021) 111-624-333 for assistance."
         )

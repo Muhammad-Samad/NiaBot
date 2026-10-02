@@ -20,3 +20,8 @@ google-genai>=0.3.0
 
 # ─── Retry/resilience (operations LLM failover) ────────────────────────────
 tenacity>=8.2.0
+
+# ─── Policy domain: RAG (versions pinned to the General_Policy RAG project) ─
+chromadb==1.5.9           # vector store; also provides the offline ONNX embedder (POLICY_EMBEDDING_PROVIDER=local)
+pypdf==6.19.0             # knowledge-base loading for scripts/ingest_policy.py
+python-docx==1.2.0

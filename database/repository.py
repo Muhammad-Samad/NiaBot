@@ -31,7 +31,7 @@ class OrderRepository:
                     res = cursor.fetchone()
                     cursor.close()
                     if res:
-                        logger.info(f"Resolved parent order {increment_id} to child order {res['increment_id']}")
+                        logger.debug(f"Resolved parent order {increment_id} to child order {res['increment_id']}")
                         return res["increment_id"]
             except Exception as e:
                 logger.error(f"Error resolving parent order: {e}")
@@ -315,7 +315,7 @@ class OrderRepository:
         mock_fallback = os.getenv("DB_MOCK_FALLBACK", "false").lower() == "true"
         try:
             with DatabaseManager() as conn:
-                logger.info(f"Fetching order with increment_id: {increment_id}")
+                logger.debug(f"Fetching order with increment_id: {increment_id}")
                 cursor = conn.cursor(dictionary=True)
 
                 # Parent + all children in a single round trip, whether the
@@ -332,7 +332,7 @@ class OrderRepository:
                     if not parent_order:
                         logger.warning(f"Order not found for increment_id: {increment_id}")
                         raise OrderNotFoundError(f"Order with increment_id {increment_id} not found.")
-                    logger.info(f"Parent of order {increment_id} not found. Using entered order as parent.")
+                    logger.debug(f"Parent of order {increment_id} not found. Using entered order as parent.")
                     cursor.execute(f"SELECT {self._ORDER_COLUMNS} {self._ORDER_FROM} WHERE o.relation_parent_id = %s ORDER BY o.entity_id", (parent_order.entity_id,))
                     seen = set()
                     for row in cursor.fetchall():
@@ -340,19 +340,19 @@ class OrderRepository:
                             seen.add(row["entity_id"])
                             parent_order.child_orders.append(self._row_to_order(row))
 
-                logger.info(f"Successfully retrieved parent order: {parent_order.increment_id}")
-                logger.info(f"Parent order detection: found {len(parent_order.child_orders)} child orders for {parent_order.increment_id}")
-                logger.info(f"Payment method for {increment_id}: {parent_order.payment_method}")
+                logger.debug(f"Successfully retrieved parent order: {parent_order.increment_id}")
+                logger.debug(f"Parent order detection: found {len(parent_order.child_orders)} child orders for {parent_order.increment_id}")
+                logger.debug(f"Payment method for {increment_id}: {parent_order.payment_method}")
                 if parent_order.refund_state is not None:
-                    logger.info(f"Refund status for {increment_id}: State={parent_order.refund_state}")
+                    logger.debug(f"Refund status for {increment_id}: State={parent_order.refund_state}")
 
                 if parent_order.child_orders:
                     # Fetch unavailable items (comparing parent to ALL child orders)
                     child_entity_ids = [str(c.entity_id) for c in parent_order.child_orders]
                     child_ids_str = ",".join(child_entity_ids)
                     
-                    logger.info(f"Parent Order ID: {parent_order.increment_id}")
-                    logger.info(f"Child Order IDs: {[c.increment_id for c in parent_order.child_orders]}")
+                    logger.debug(f"Parent Order ID: {parent_order.increment_id}")
+                    logger.debug(f"Child Order IDs: {[c.increment_id for c in parent_order.child_orders]}")
                     
                     query = f"""
                         SELECT p.name, (p.qty_ordered - COALESCE(c.child_qty, 0)) as unavailable_qty, p.sku, p.qty_ordered as parent_qty, c.child_qty
@@ -369,9 +369,9 @@ class OrderRepository:
                     cursor.execute(query, (parent_order.entity_id,))
                     for item in cursor.fetchall():
                         parent_order.unavailable_items.append({"name": item["name"], "qty": float(item["unavailable_qty"])})
-                        logger.info(f"Unavailable calculation for SKU {item['sku']}: Parent Qty={item['parent_qty']}, Child Qty={item['child_qty']}, Unavailable={item['unavailable_qty']}")
+                        logger.debug(f"Unavailable calculation for SKU {item['sku']}: Parent Qty={item['parent_qty']}, Child Qty={item['child_qty']}, Unavailable={item['unavailable_qty']}")
                         
-                    logger.info(f"Final unavailable_items list: {parent_order.unavailable_items}")
+                    logger.debug(f"Final unavailable_items list: {parent_order.unavailable_items}")
 
                 cursor.close()
                 return parent_order
@@ -410,7 +410,7 @@ class OrderRepository:
         query = "SELECT status FROM sales_order WHERE increment_id = %s"
         try:
             with DatabaseManager() as conn:
-                logger.info(f"Fetching order status for increment_id: {increment_id}")
+                logger.debug(f"Fetching order status for increment_id: {increment_id}")
                 cursor = conn.cursor(dictionary=True)
                 cursor.execute(query, (increment_id,))
                 result = cursor.fetchone()
@@ -421,7 +421,7 @@ class OrderRepository:
                     raise OrderNotFoundError(f"Order with increment_id {increment_id} not found.")
                 
                 status = result["status"]
-                logger.info(f"Successfully retrieved status '{status}' for order: {increment_id}")
+                logger.debug(f"Successfully retrieved status '{status}' for order: {increment_id}")
                 return status
         except OrderNotFoundError:
             raise
@@ -439,7 +439,7 @@ class OrderRepository:
         try:
             if not cls._status_labels or time.time() - cls._status_labels_loaded_at > cls._STATUS_LABEL_TTL_SECONDS:
                 with DatabaseManager() as conn:
-                    logger.info("Loading status labels from sales_order_status")
+                    logger.debug("Loading status labels from sales_order_status")
                     cursor = conn.cursor(dictionary=True)
                     cursor.execute("SELECT status, label FROM sales_order_status")
                     rows = cursor.fetchall()
@@ -449,7 +449,7 @@ class OrderRepository:
 
             label = cls._status_labels.get(status.lower())
             if label:
-                logger.info(f"Retrieved label '{label}' for status: {status}")
+                logger.debug(f"Retrieved label '{label}' for status: {status}")
                 return label
             return status.capitalize()
         except Exception as e:
@@ -540,10 +540,7 @@ class OrderRepository:
                 (parent_id, is_customer_notified, is_visible_on_front, comment, status, entity_name) 
                 VALUES (%s, 0, 0, %s, 'canceled', 'order')
                 """
-                logger.info(f"PRE-INSERT SQL: {insert_history_query}")
-                logger.info(f"PRE-INSERT PARAMS: parent_id={entity_id}, comment={formatted_comment}")
                 cursor.execute(insert_history_query, (entity_id, formatted_comment))
-                logger.info(f"POST-INSERT: cursor.rowcount={cursor.rowcount}, cursor.lastrowid={cursor.lastrowid}")
                 
                 conn.commit()
                 logger.info(f"Successfully cancelled order {increment_id} (entity_id={entity_id}) in database via transaction.")
@@ -585,7 +582,7 @@ class ComplaintRepository:
         """
         try:
             with DatabaseManager() as conn:
-                logger.info(f"Creating complaint ticket for order {order_number} (priority={priority}, mood={mood})")
+                logger.debug(f"Creating complaint ticket for order {order_number} (priority={priority}, mood={mood})")
                 cursor = conn.cursor()
                 cursor.execute(query, (order_number, entity_id, name, email, phone, subject, complain, complain_type, priority))
                 conn.commit()
@@ -605,7 +602,7 @@ class ComplaintRepository:
         """
         try:
             with DatabaseManager() as conn:
-                logger.info(f"Adding attachment for ticket {ticket_no}: {image_url}")
+                logger.debug(f"Adding attachment for ticket {ticket_no}: {image_url}")
                 cursor = conn.cursor()
                 cursor.execute(query, (ticket_no, image_url))
                 conn.commit()
