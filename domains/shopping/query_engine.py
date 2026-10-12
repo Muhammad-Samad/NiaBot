@@ -162,59 +162,140 @@ def extract_relative_price_direction(user_msg: str):
 # Replaces the old separate is_off_topic() and expand_query() calls. Both were
 # doing a full LLM round-trip on every message; folding them into one call
 # halves the per-message LLM cost/latency without losing either rule set.
+# Shared by _SYSTEM_PROMPT and the dedicated _LIST_PROMPT fallback below.
+_LIST_RULES = """
+  LIST RULES (all mandatory):
+  1. 6–10 items. Variety: cover several DIFFERENT product types (equipment, accessories, clothing, consumables, care items). Max 2 of the same type.
+  2. NEVER repeat the theme word in the items. For "gym products" write "Weight Lifting Belt", not "Gym Belt"; "Duffel Bag", not "Gym Bag".
+     (Repeating the theme word makes the search return only one kind of product.)
+  3. Use plain, common product names that a store would actually stock. No brands unless the customer named one.
+  4. Food names that also match non-food items MUST carry a food qualifier: "Dairy Butter" (never "Butter") or "Chicken meat" (never "Chicken").
+  5. For gifts, never use the word "gift".
+
+  Examples:
+  - "suggest me some gym products" / "gym related products" / "gym" -> ["Whey Protein", "Weight Lifting Belt", "Workout Gloves", "Yoga Mat", "Resistance Bands", "Shaker Bottle", "Sports Towel", "Duffel Bag"]
+  - "baby products"                 -> ["Diapers", "Baby Wipes", "Feeding Bottle", "Baby Lotion", "Baby Shampoo", "Baby Cereal", "Pacifier", "Baby Powder"]
+  - "kitchen items"                 -> ["Non Stick Pan", "Pressure Cooker", "Knife Set", "Cutting Board", "Storage Containers", "Spatula", "Dinner Set"]
+  - "camping"                       -> ["Tent", "Sleeping Bag", "Torch", "Water Bottle", "Portable Stove", "Insect Repellent", "Cooler Box"]
+  - "breakfast"                     -> ["Paratha", "Farm Eggs", "Bread", "Dairy Butter", "Honey", "Jam", "Oatmeal", "Tea", "Juice"]
+  - "Chicken Biryani Ingredients"   -> ["Chicken meat", "Basmati Rice", "Yogurt", "Onion (Pyaaz)", "Tomato (Tamatar)", "Ginger Powder", "Garlic (Lehsan)", "Green Chilli", "Coriander (Dhania) leaves"]
+  - "birthday party"                -> ["Balloons", "Cake", "Candles", "Paper Plates", "Paper Cups", "Streamers", "Chocolates", "Party Hats"]
+  - "something for my wife"         -> ["Perfume", "Handbag", "Jewelry Set", "Makeup Kit", "Skincare Set", "Watch"]
+"""
+
 _SYSTEM_PROMPT = """
 You are a shopping-query understanding engine for a Pakistani retail store.
 For every customer message return ONLY this JSON (no extra text):
-{"off_topic": true|false, "query": "...", "is_followup": true|false}
+{"off_topic": true|false, "is_followup": true|false, "kind": "product"|"list"|"followup", "query": "...", "items": ["...", ...]}
 
 ## off_topic
-- false: the message names/implies a product or category; is about browsing, buying, pricing, or the store; describes an occasion/activity that implies buying (birthday, gym, wedding, picnic, Eid, baby shower, anniversary...); or is a short follow-up in an ongoing shopping chat ("for men's", "make it cheaper", "only HP ones").
-- true: ONLY when there is no shopping angle at all (chit-chat, weather, politics, coding, unrelated jokes).
+- false: anything with a shopping angle — a product, category, theme, activity, occasion, store question, or a short follow-up in an ongoing shopping chat.
+- true: ONLY when there is no shopping angle at all (chit-chat, weather, politics, coding, jokes).
 
 ## is_followup
 Test: "Could a stranger with NO chat history tell what PRODUCT or CATEGORY to search for from this message alone?"
-- No -> is_followup=true. Typical cases (illustrations, not an exhaustive list):
-  - Brand only, with no product noun: "what about Nike?", "show me from canon", "do you have Samsung", "any Sony?" (a brand alone never defines a category).
-  - Refinements without a product noun: budget ("under 5000", "cheaper ones"), audience ("for my daughter", "for men's"), attribute ("in white", "large size"), continuation ("show more", "yes"), reference ("the first one").
-- Yes -> is_followup=false, even right after a different topic: "laptops under 150k", "canon printers", "mens perfumes", "something for my wife".
+- No  -> true  (brand only: "any Samsung?"; audience: "for men's", "for women", "for kids"; attribute: "in white", "large size";
+               continuation: "show more", "yes", "no"; reference: "the first one"; budget: "under 5000", "cheaper ones").
+- Yes -> false ("gym products", "laptops under 150k", "something for my wife").
+A follow-up is NEVER off_topic, even a bare "yes" or "no".
 
-## query  (if off_topic=true, echo the message unchanged)
-Pick the FIRST rule that applies:
+## kind
+First strip filler words ("suggest me", "show me", "i want", "i need", "can you", "some", "please", "any", "give me", "recommend") and judge only the core that remains.
+- "followup": is_followup is true. Check this FIRST — a fragment that names no product is a followup, never a list:
+              "for men's", "for women", "in white", "only large", "show more", "yes", "cheaper ones", "what about Nike?", "any Samsung?".
+- "product":  the core is exactly ONE concrete product type: "cooking oil", "face wash", "whey protein", "rice", "shampoo", "dumbbells", "laptop", "gym bag".
+- "list":     EVERYTHING ELSE (the DEFAULT). Any word followed by "products", "items", "related", "things", "stuff", "essentials", "accessories",
+              "supplies", "needs", "gear", "equipment", "kit", and any theme, area, activity, occasion, person/gift, or category:
+              "gym products", "gym related products", "gym", "workout", "baby products", "kitchen items", "school supplies", "camping",
+              "birthday party", "breakfast", "grocery", "something for my wife".
+When unsure, choose "list".
 
-A. Sunglasses -> "[Men's/Women's] [Brand] [Frame Color] [Lens Color] Lens Sunglasses"
-   Include gender/brand/colors only if stated; default lens color Black/Brown when gender is given.
-   "sunglasses" -> "Lens Sunglasses"; "men's sunglasses" -> "Men's Black Lens Sunglasses"; "brown sunglasses" -> "Brown Lens Sunglasses"
+## query  (kind "product" / "followup", or off_topic=true)
+Return the original message UNCHANGED. Do not infer, rewrite, or complete it.
+Sunglasses exception: "sunglasses"/"men's sunglasses" etc. -> "[Men's/Women's] [Brand] [Frame Color] [Lens Color] Lens Sunglasses"
+(include parts only if stated; default lens Black/Brown when gender is given).
 
-B. Broad/general request — any category, theme, activity, occasion, or list need ("gym products", "gym workout", "grocery", "breakfast", "stationery", "baby products", "birthday party", "camping", "water park") ->
-   Return a comma-separated list of 6–10 SPECIFIC product names.
-   DIVERSITY RULE (mandatory):
-   - Cover several DIFFERENT sub-types of the theme (e.g. equipment, accessories, apparel, consumables, care items).
-   - Max 2 items from the same sub-type. Never fill the list with variants of one kind (e.g. only supplements).
-   - Order items so the most different sub-types come first.
-   Examples:
-   - "gym products" -> "Gym Belt, Gym Gloves, Dumbbells, Resistance Bands, Whey Protein, Pre Workout, Shaker Bottle, Yoga Mat, Gym Bag, Sports Towel"
-   - "breakfast" -> "Paratha, Farm Eggs, Bread, Dairy Butter, Honey, Jam, Oatmeal, Tea, Juice"
-   - "dairy products" -> "Milk, Yogurt, Cheese, Dairy Butter, Cream, Farm Eggs"
-   - "birthday party" -> "Happy Birthday Decor, Balloons, Cake, Candles, Paper Plates, Paper Cups, Streamers, Chocolates, Gift Wrap"
-   - "grocery" -> "Basmati Rice, Cooking Oil, Sugar, Salt, Daal Mash, Red Chili Powder, Tea, Milk, Noodles, Onions"
-   - "Chicken Biryani Ingredients" -> "Chicken meat, Cooking Oil, Yogurt, Salt, Basmati Rice, Red Chili Powder, Biryani Masala, Tomatoes, Green Chilies, Onion (Pyaaz)"
-   - "stationery" -> "Ball Pen, Pencil, Notebook, Eraser, Sharpener, Geometry Box, Highlighter, Glue Stick"
-   Food names that also match non-food items MUST carry a food qualifier: "Dairy Butter" (never "Butter").
-
-C. Gift for a person ("something for my wife", "gift for my dad") ->
-   Same as B: 5–8 specific gift products suited to that recipient, across different sub-types. Never use the word "gift".
-   - "something for my wife" -> "Chocolates, Perfume, Handbag, Jewelry Set, Makeup Kit, Skincare Set, Watch"
-   - "gift for my husband" -> "Perfume, Wallet, Watch, Tie, Cufflinks, Grooming Kit"
-   - "something for my dad" -> "Wallet, Watch, Perfume, Formal Shirt, Shaving Kit"
-
-D. Specific product mention ("show cooking oils", "i need face wash", "whey protein") or a follow-up fragment ("for men's", "only large", "show more", "yes") ->
-   Return the message UNCHANGED. Do not infer, rewrite, or complete it.
-
-How to tell B from D: if the message names ONE concrete product type, use D. If it names a broad theme/area that contains many different product types (gym, kitchen, baby, party, school, travel, sports), use B.
-
+## items  (kind "list" only; otherwise [])
+SPECIFIC product names to search for, one per array entry.
+""" + _LIST_RULES + """
 ## CRITICAL
-"query" must be either the customer's exact words or real product names. NEVER output a category label, occasion name, or rule name (e.g. "Generic list request", "Gym Products", "Anniversary Gift", "Gift Request").
+NEVER output a category label or rule name ("Gym Products", "Generic list request", "Gift Request") in query or items.
 """
+
+# Used only when the message is clearly broad but analyze_query's main call
+# still didn't produce a list (see _BROAD_REQUEST_PATTERN).
+_LIST_PROMPT = """
+You expand a customer's broad shopping request for a Pakistani retail store into specific products to search for.
+Return ONLY this JSON (no extra text): {"items": ["...", ...]}
+""" + _LIST_RULES
+
+# Words that make a message a broad, multi-product request no matter how the
+# LLM classified it. A single-item search for "gym products" lets the
+# category matcher lock onto one category (e.g. Gym Bags) and every result
+# comes back as that one product type, so these messages are always forced
+# into the multi-item list path.
+_BROAD_REQUEST_PATTERN = re.compile(
+    r"\b(products?|items?|related|things|stuff|essentials|accessories|supplies|"
+    r"needs|gear|equipment|collection|range|ideas)\b",
+    re.IGNORECASE,
+)
+
+MIN_LIST_ITEMS = 3
+
+# Short refinement fragments that are always follow-ups, whatever the LLM
+# says. Seen alone (with no chat history) the LLM tends to misread these —
+# "for women" as a gift list, "in white" as a list of white products, "yes"
+# as off-topic — which would drop the previous topic from the next search.
+_COLORS = (r"black|white|red|blue|green|yellow|pink|purple|orange|brown|grey|gray|"
+           r"silver|golden|gold|beige|maroon|navy|cream|multicolou?r")
+_FOLLOWUP_PATTERNS = [re.compile(p) for p in (
+    # audience: "for men's", "only for women", "kids ones"
+    r"(?:only |just )?(?:for )?(?:the )?(?:men'?s?|women'?s?|ladies|gents|male|female|boys?|girls?|kids?|children|babies|him|her)(?: ones?| only)?",
+    # colour: "in white", "black ones", "red colour"
+    rf"(?:in |only |any )?(?:{_COLORS})(?: colou?r| ones?| only)?",
+    # size: "only large", "xl size"
+    r"(?:in |only |any )?(?:small|medium|large|x{0,3}l|x?s|m|big|bigger|smaller)(?: size| ones?| only)?",
+    # continuation / confirmation
+    r"(?:yes|yeah|yup|yep|sure|ok(?:ay)? show|no|nope|nah|more|show more|show me more|more options|other options|"
+    r"something else|any other|anything else|next|another one|others?)",
+    # reference to a shown item
+    r"(?:the )?(?:first|second|third|fourth|last|1st|2nd|3rd|4th) one",
+)]
+
+
+def is_followup_fragment(user_msg: str) -> bool:
+    msg = re.sub(r"[^\w\s']", " ", user_msg.lower())
+    msg = re.sub(r"\s+", " ", msg).strip()
+    return any(p.fullmatch(msg) for p in _FOLLOWUP_PATTERNS)
+
+
+def _clean_items(raw) -> list[str]:
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    if not isinstance(raw, list):
+        return []
+    return [str(i).strip() for i in raw if str(i).strip()]
+
+
+def _expand_to_list(user_msg: str) -> list[str]:
+    """Dedicated list-only LLM call. Returns [] on any error."""
+    try:
+        r = openai_client.chat.completions.create(
+            model=LLM_MODEL,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": _LIST_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0,
+            max_tokens=200,
+        )
+        items = _clean_items(json.loads(r.choices[0].message.content).get("items"))
+        print(f"[_expand_to_list] {user_msg!r} -> {items}")
+        return items
+    except Exception as e:
+        print(f"[_expand_to_list] Error: {e}")
+        return []
 
 
 def analyze_query(user_msg: str):
@@ -224,7 +305,10 @@ def analyze_query(user_msg: str):
     rather than silently mishandling it — and defaulting is_followup to False
     means a failure never accidentally drags stale conversation context into
     an unrelated new search (see app.py, where is_followup gates whether the
-    prior conversation_id is sent to Typesense)."""
+    prior conversation_id is sent to Typesense).
+
+    For list requests, query is the items joined with ", " — that comma
+    list is what routes search.py into its multi-item path."""
     try:
         r = openai_client.chat.completions.create(
             model=LLM_MODEL,
@@ -234,17 +318,41 @@ def analyze_query(user_msg: str):
                 {"role": "user", "content": user_msg},
             ],
             temperature=0,
-            max_tokens=200,
+            max_tokens=250,
         )
         result = json.loads(r.choices[0].message.content)
         off_topic = bool(result.get("off_topic", False))
-        query = (result.get("query") or "").strip() or user_msg
         is_followup = bool(result.get("is_followup", False))
-        print(f"[analyze_query] off_topic={off_topic} query={query!r} is_followup={is_followup}")
-        return off_topic, query, is_followup
+        kind = str(result.get("kind") or "").lower()
+        items = _clean_items(result.get("items"))
+        query = (result.get("query") or "").strip() or user_msg
     except Exception as e:
         print(f"[analyze_query] Error: {e}")
-        return False, user_msg, False
+        off_topic, is_followup, kind, items, query = False, False, "", [], user_msg
+
+    # A follow-up is resolved against the previous topic (see service.py),
+    # so it must stay the customer's own fragment — never expanded into a
+    # fresh list, and never rejected as off-topic.
+    if is_followup_fragment(user_msg):
+        off_topic, is_followup = False, True
+    if kind == "followup":
+        is_followup = True
+    if is_followup:
+        kind, items, query = "followup", [], user_msg
+
+    # Deterministic safety net: a broad request must always become a list,
+    # even when the LLM classified it as a single product.
+    wants_list = kind == "list" or (
+        not off_topic and not is_followup and _BROAD_REQUEST_PATTERN.search(user_msg)
+    )
+    if wants_list and not off_topic:
+        if len(items) < MIN_LIST_ITEMS:
+            items = _expand_to_list(user_msg)
+        if len(items) >= MIN_LIST_ITEMS:
+            query = ", ".join(items)
+
+    print(f"[analyze_query] off_topic={off_topic} kind={kind!r} query={query!r} is_followup={is_followup}")
+    return off_topic, query, is_followup
 
 
 OFF_TOPIC_REPLY = (
