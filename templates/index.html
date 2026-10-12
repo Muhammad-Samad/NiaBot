@@ -281,6 +281,55 @@
   .option-list.used .option-btn .num { background: var(--text-muted); }
   .option-list.used .option-btn.selected { opacity: 1; border-color: var(--brand-red); background: var(--brand-red-lt); }
   .option-list.used .option-btn.selected .num { background: var(--brand-red); }
+  /* Complaint item picker: product table with a checkbox and complaint qty per row */
+  .item-picker { margin: 8px 0; }
+  .item-picker-scroll { overflow-x: auto; }
+  .item-picker table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .item-picker th {
+    text-align: left; font-weight: 700; color: var(--text-primary);
+    padding: 6px 8px; border-bottom: 1px solid var(--neutral-border); vertical-align: bottom;
+  }
+  .item-picker td { padding: 8px; vertical-align: top; color: var(--text-primary); }
+  .item-picker tbody tr:nth-child(odd) td { background: var(--neutral-bg); }
+  .item-picker tbody tr.checked td { background: var(--brand-red-lt); }
+  .item-picker .ip-img {
+    width: 56px; height: 56px; object-fit: contain;
+    background: #fff; border-radius: var(--radius-sm); display: block;
+  }
+  .item-picker .ip-img-placeholder {
+    width: 56px; height: 56px; border-radius: var(--radius-sm); background: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 22px;
+  }
+  .item-picker .ip-name { min-width: 140px; }
+  .item-picker .ip-num { white-space: nowrap; }
+  .item-picker input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--brand-red); cursor: pointer; }
+  .item-picker select {
+    font: inherit; padding: 4px 6px; border: 1px solid var(--neutral-border);
+    border-radius: var(--radius-sm); background: #fff; color: #222;
+  }
+  .item-picker .ip-footer { display: flex; justify-content: flex-end; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-border); }
+  .item-picker.used { opacity: .6; }
+  .item-picker.used input, .item-picker.used select { cursor: default; }
+  .item-picker.used .option-submit { display: none; }
+
+  /* Multi-select lists ("select one or more"): options toggle, then Submit sends them all */
+  .option-list.multi .option-btn.selected { border-color: var(--brand-red); background: var(--brand-red-lt); }
+  .option-list.multi .option-btn.selected .num { font-size: 0; }
+  .option-list.multi .option-btn.selected .num::after { content: '✓'; font-size: 12px; }
+  .option-submit {
+    align-self: flex-end;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--brand-red);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 7px 16px;
+    cursor: pointer;
+  }
+  .option-submit:disabled { opacity: .5; cursor: default; }
+  .option-list.used .option-submit { display: none; }
 
   /* Product cards inside bubble */
   .product-grid {
@@ -918,10 +967,72 @@
   const OPTION_LINE_RE   = /^\s*(\d{1,2})[.)]\s+(.+?)\s*$/;
   const OPTION_PROMPT_RE = /\b(choose|select|pick)\b|reply with a number/i;
   const BARE_NUMBER_RE   = /^\s*(\d{1,2})\s*[.):]?\s*$/;
+  // A prompt saying "one or more" (e.g. complaint item selection) is rendered
+  // as a multi-select: options toggle and a Submit button sends "1, 3".
+  const MULTI_PROMPT_RE  = /\bone or more\b/i;
+  const NUMBER_LIST_RE   = /^\s*\d{1,2}(?:\s*[,\s]\s*\d{1,2})*\s*$/;
+
+  // The complaint item-selection prompt ends with an "ITEM_PICKER::[...]" line
+  // holding the order items as JSON. It is rendered as a product table
+  // (checkbox, image, name, price, ordered qty, complaint qty) in place of
+  // the plain numbered list; Submit sends "1:2, 3:1" (item number:qty).
+  const ITEM_PICKER_RE = /^ITEM_PICKER::(.+)$/m;
+
+  function formatQty(q) {
+    return String(Number(Number(q || 0).toFixed(4)));
+  }
+
+  function renderItemPicker(text, items) {
+    // Keep the prompt text, minus the numbered list and the typing hint.
+    const intro = text.replace(ITEM_PICKER_RE, '').split('\n')
+      .filter(l => !OPTION_LINE_RE.test(l) && !/^\s*reply with the item numbers/i.test(l))
+      .join('\n').replace(/^\n+|\n+$/g, '');
+    const rows = items.map(it => {
+      const ordered = Number(it.qty || 0);
+      const maxQty = Math.max(1, Math.floor(ordered));
+      let opts = '';
+      for (let q = 1; q <= maxQty; q++) opts += `<option value="${q}"${q === 1 ? ' selected' : ''}>${q}</option>`;
+      const img = it.image_url
+        ? `<img class="ip-img" src="${escapeAttr(it.image_url)}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">`
+          + `<div class="ip-img-placeholder" style="display:none">📦</div>`
+        : `<div class="ip-img-placeholder">📦</div>`;
+      const price = Number(it.price || 0).toLocaleString('en-PK', { minimumFractionDigits: 2 });
+      return `
+        <tr data-n="${Number(it.n)}" data-label="${escapeAttr(it.name)}">
+          <td><input type="checkbox" class="ip-check" aria-label="Select ${escapeAttr(it.name)}"></td>
+          <td>${img}</td>
+          <td class="ip-name">${escapeHtml(it.name)}</td>
+          <td class="ip-num">${price}</td>
+          <td class="ip-num">${formatQty(ordered)}</td>
+          <td><select class="ip-qty" aria-label="Complaint quantity">${opts}</select></td>
+        </tr>`;
+    }).join('');
+    return (intro ? `<div>${renderText(intro)}</div>` : '') + `
+      <div class="item-picker">
+        <div class="item-picker-scroll">
+          <table>
+            <thead><tr>
+              <th></th><th>Image</th><th>Name</th><th>Price</th><th>Ordered Qty</th><th>Complaint Qty</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div class="ip-footer"><button type="button" class="option-submit ip-submit" disabled>Submit</button></div>
+      </div>`;
+  }
 
   function renderBotContent(s) {
-    const text = String(s || '');
+    const raw = String(s || '');
+    const picker = raw.match(ITEM_PICKER_RE);
+    if (picker) {
+      try {
+        const items = JSON.parse(picker[1]);
+        if (Array.isArray(items) && items.length) return renderItemPicker(raw, items);
+      } catch (e) { /* fall back to the numbered list below */ }
+    }
+    const text = raw.replace(ITEM_PICKER_RE, '');
     if (!OPTION_PROMPT_RE.test(text)) return renderText(text);
+    const multi = MULTI_PROMPT_RE.test(text);
 
     const lines = text.split('\n');
     let html = '', buffer = [], found = false;
@@ -932,20 +1043,23 @@
     };
 
     for (let i = 0; i < lines.length; ) {
-      // An option list is a run of at least two lines numbered 1, 2, 3, ...
+      // An option list is a run of lines numbered 1, 2, 3, ... - at least two,
+      // except a multi-select prompt (e.g. an order with a single item).
       const items = [];
       while (i + items.length < lines.length) {
         const m = lines[i + items.length].match(OPTION_LINE_RE);
         if (!m || Number(m[1]) !== items.length + 1) break;
         items.push({ n: items.length + 1, label: m[2] });
       }
-      if (items.length >= 2) {
+      if (items.length >= (multi ? 1 : 2)) {
         flushText();
-        html += '<div class="option-list">' + items.map(it => `
+        html += `<div class="option-list${multi ? ' multi' : ''}">` + items.map(it => `
           <button type="button" class="option-btn" data-n="${it.n}" data-label="${escapeHtml(it.label)}">
             <span class="num">${it.n}</span>
             <span class="label">${renderText(it.label)}</span>
-          </button>`).join('') + '</div>';
+          </button>`).join('')
+          + (multi ? '<button type="button" class="option-submit" disabled>Submit</button>' : '')
+          + '</div>';
         found = true;
         i += items.length;
       } else {
@@ -963,34 +1077,85 @@
     return lists.length ? lists[lists.length - 1] : null;
   }
 
-  // Label of the on-screen option a bare-number message picks, else null.
-  function activeOptionLabel(text) {
-    const m = String(text || '').match(BARE_NUMBER_RE);
-    const list = activeOptionList();
-    if (!m || !list) return null;
-    const btn = list.querySelector(`.option-btn[data-n="${Number(m[1])}"]`);
-    return btn ? btn.dataset.label : null;
+  // Numbers picked by a reply: a bare number, or "1, 3" for a multi-select list.
+  function pickedNumbers(text, list) {
+    const s = String(text || '');
+    const m = s.match(BARE_NUMBER_RE);
+    if (m) return [Number(m[1])];
+    if (list && list.classList.contains('multi') && NUMBER_LIST_RE.test(s)) {
+      return s.match(/\d+/g).map(Number);
+    }
+    return [];
   }
 
-  // Locks every open option list; if `answer` (the user's reply) picks one
-  // of its options by number or label, that option stays highlighted.
+  // Label(s) of the on-screen option(s) a number reply picks, else null.
+  function activeOptionLabel(text) {
+    const list = activeOptionList();
+    if (!list) return null;
+    const labels = pickedNumbers(text, list)
+      .map(n => list.querySelector(`.option-btn[data-n="${n}"]`))
+      .filter(Boolean)
+      .map(btn => btn.dataset.label);
+    return labels.length ? labels.join(', ') : null;
+  }
+
+  // Locks every open option list; if `answer` (the user's reply) picks
+  // options by number or label, those options stay highlighted.
   function settleOptions(answer) {
-    const m = answer != null ? String(answer).match(BARE_NUMBER_RE) : null;
     const typed = answer != null ? String(answer).trim().toLowerCase() : null;
     document.querySelectorAll('.option-list:not(.used)').forEach(list => {
+      const nums = answer != null ? pickedNumbers(answer, list) : [];
       list.querySelectorAll('.option-btn').forEach(btn => {
-        const picked = (m && Number(btn.dataset.n) === Number(m[1]))
+        const picked = nums.includes(Number(btn.dataset.n))
           || (typed && btn.dataset.label.toLowerCase() === typed);
         if (picked) btn.classList.add('selected');
         btn.disabled = true;
       });
       list.classList.add('used');
     });
+    document.querySelectorAll('.item-picker:not(.used)').forEach(picker => {
+      picker.querySelectorAll('input, select, button').forEach(el => { el.disabled = true; });
+      picker.classList.add('used');
+    });
   }
 
+  // Complaint item picker: a ticked row is highlighted, Submit needs one ticked.
+  document.getElementById('messages').addEventListener('change', e => {
+    const check = e.target.closest('.item-picker .ip-check');
+    if (!check) return;
+    const picker = check.closest('.item-picker');
+    check.closest('tr').classList.toggle('checked', check.checked);
+    picker.querySelector('.ip-submit').disabled = !picker.querySelector('.ip-check:checked');
+  });
+
   document.getElementById('messages').addEventListener('click', e => {
+    if (document.getElementById('send-btn').disabled) return;
+    const pickerSubmit = e.target.closest('.ip-submit');
+    if (pickerSubmit) {
+      if (pickerSubmit.disabled) return;
+      const rows = [...pickerSubmit.closest('.item-picker').querySelectorAll('tbody tr')]
+        .filter(tr => tr.querySelector('.ip-check').checked)
+        .map(tr => ({ n: tr.dataset.n, label: tr.dataset.label, qty: tr.querySelector('.ip-qty').value }));
+      postChatMessage(
+        rows.map(r => `${r.n}:${r.qty}`).join(', '),
+        rows.map(r => `${r.label} (Qty: ${r.qty})`).join(', ')
+      );
+      return;
+    }
+    const submit = e.target.closest('.option-submit');
+    if (submit && !submit.disabled) {
+      const chosen = [...submit.closest('.option-list').querySelectorAll('.option-btn.selected')];
+      postChatMessage(chosen.map(b => b.dataset.n).join(', '), chosen.map(b => b.dataset.label).join(', '));
+      return;
+    }
     const btn = e.target.closest('.option-btn');
-    if (!btn || btn.disabled || document.getElementById('send-btn').disabled) return;
+    if (!btn || btn.disabled) return;
+    const list = btn.closest('.option-list');
+    if (list.classList.contains('multi')) {
+      btn.classList.toggle('selected');
+      list.querySelector('.option-submit').disabled = !list.querySelector('.option-btn.selected');
+      return;
+    }
     postChatMessage(btn.dataset.n, btn.dataset.label);
   });
 

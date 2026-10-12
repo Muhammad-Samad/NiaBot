@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from database.repository import OrderRepository, ComplaintRepository
 from services.audit_service import AuditService
 from core.audit_events import AuditEvent, AuditCategory, AuditOutcome
@@ -16,7 +16,7 @@ class ComplaintService:
         self.order_repository = order_repository or OrderRepository()
         self.audit_service = audit_service or AuditService()
 
-    def create_complaint(self, order_id: str, complaint_type: str, details: str, image_url: str = None, priority: str = "low", mood: str = "happy") -> Dict[str, Any]:
+    def create_complaint(self, order_id: str, complaint_type: str, details: str, image_url: str = None, priority: str = "low", mood: str = "happy", items: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         start_time = time.time()
         try:
             # Check for duplicate complaint type. "Other" complaints are free text
@@ -56,6 +56,14 @@ class ComplaintService:
 
             if image_url:
                 self.complaint_repository.add_ticket_attachment(ticket_no, image_url)
+
+            if items:
+                # The ticket itself is already saved, so a failure here must not
+                # tell the customer their complaint wasn't registered.
+                try:
+                    self.complaint_repository.add_ticket_products(ticket_no, order_id, items)
+                except Exception as e:
+                    logger.error(f"Could not add products to complaint ticket #{ticket_no}: {e}")
 
             duration_ms = int((time.time() - start_time) * 1000)
             self.audit_service.log_event(

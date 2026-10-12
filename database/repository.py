@@ -133,6 +133,65 @@ class OrderRepository:
                 
         return unavailable
 
+    def get_order_items_for_complaint(self, increment_id: str) -> list:
+        """
+        Returns the items of an order as dicts (product_id, name, sku, image_url,
+        original_price, price, qty) for the customer to pick from when filing a
+        complaint. Child rows of configurable/bundle products are skipped.
+        """
+        import os
+        items_query = """
+        SELECT i.product_id, i.name, i.sku, i.original_price, i.price, i.qty_ordered
+        FROM sales_order_item i
+        JOIN sales_order o ON i.order_id = o.entity_id
+        WHERE o.increment_id = %s AND i.parent_item_id IS NULL
+        ORDER BY i.item_id
+        """
+        try:
+            with DatabaseManager() as conn:
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute(items_query, (increment_id,))
+                rows = cursor.fetchall()
+
+                # Product images are optional - a failed lookup still returns the items.
+                images = {}
+                product_ids = [r["product_id"] for r in rows if r["product_id"]]
+                if product_ids:
+                    placeholders = ",".join(["%s"] * len(product_ids))
+                    image_query = f"""
+                    SELECT v.entity_id, v.value
+                    FROM catalog_product_entity_varchar v
+                    JOIN eav_attribute a ON a.attribute_id = v.attribute_id
+                    JOIN eav_entity_type t ON t.entity_type_id = a.entity_type_id
+                    WHERE t.entity_type_code = 'catalog_product' AND a.attribute_code = 'image'
+                      AND v.store_id = 0 AND v.entity_id IN ({placeholders})
+                    """
+                    try:
+                        cursor.execute(image_query, tuple(product_ids))
+                        base_url = os.getenv("PRODUCT_IMAGE_BASE_URL", "https://www.naheed.pk/media/catalog/product").rstrip("/")
+                        for r in cursor.fetchall():
+                            if r["value"] and r["value"] != "no_selection":
+                                images[r["entity_id"]] = f"{base_url}/{r['value'].lstrip('/')}"
+                    except Exception as e:
+                        logger.warning(f"Could not fetch product images for order {increment_id}: {e}")
+                cursor.close()
+
+                return [
+                    {
+                        "product_id": r["product_id"],
+                        "name": r["name"],
+                        "sku": r["sku"],
+                        "image_url": images.get(r["product_id"]),
+                        "original_price": float(r["original_price"] or 0),
+                        "price": float(r["price"] or 0),
+                        "qty": float(r["qty_ordered"] or 0),
+                    }
+                    for r in rows
+                ]
+        except Exception as e:
+            logger.error(f"Error fetching order items for {increment_id}: {e}")
+            return []
+
     def get_payment_method(self, increment_id: str) -> str:
         """
         Returns the payment method code for an order.
@@ -610,6 +669,34 @@ class ComplaintRepository:
                 logger.info(f"Successfully added attachment to ticket #{ticket_no}")
         except Exception as e:
             logger.error(f"Database error while adding ticket attachment: {e}")
+            raise RuntimeError(f"Database error: {e}") from e
+
+    def add_ticket_products(self, ticket_no: int, order_number: str, items: list):
+        """Stores the order items the customer selected for this complaint."""
+        query = """
+        INSERT INTO nhd_complain_tickets_products_info (
+            ticket_no, order_number, product_id, name, sku, image_url,
+            original_price, price, original_qty, qty
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        rows = [
+            (
+                ticket_no, order_number, item.get("product_id"), item.get("name"), item.get("sku"),
+                item.get("image_url"), item.get("original_price") or 0, item.get("price") or 0,
+                item.get("qty") or 0, item.get("complaint_qty") or item.get("qty") or 0
+            )
+            for item in items
+        ]
+        try:
+            with DatabaseManager() as conn:
+                logger.debug(f"Adding {len(rows)} products to ticket {ticket_no}")
+                cursor = conn.cursor()
+                cursor.executemany(query, rows)
+                conn.commit()
+                cursor.close()
+                logger.info(f"Successfully added {len(rows)} products to ticket #{ticket_no}")
+        except Exception as e:
+            logger.error(f"Database error while adding ticket products: {e}")
             raise RuntimeError(f"Database error: {e}") from e
 
     def has_existing_complaint_type(self, order_number: str, complain_type: str) -> bool:

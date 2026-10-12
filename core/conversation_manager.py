@@ -331,7 +331,8 @@ class ConversationManager:
                 details=details,
                 image_url=image_url,
                 priority=state.priority,
-                mood=state.mood
+                mood=state.mood,
+                items=flow_response.tool_args.get("items")
             )
             ticket_msg = service_response.get("message", "")
             # If the flow already built a rich response (e.g. COD/refund status message),

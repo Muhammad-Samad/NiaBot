@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Optional
 from flows.base import BaseFlow, FlowResponse
@@ -9,15 +10,29 @@ from datetime import datetime
 # --- Category / sub-category taxonomy ---
 MISSING_SUBCATEGORIES = ["Missing Item", "Missing Accessories"]
 WRONG_SUBCATEGORIES = ["Wrong Product", "Damaged Product", "Expired Product", "Leak product", "Quality Issue"]
-REFUND_SUBCATEGORIES = ["Refund", "Warranty Claim", "Cashback", "Change of Mind", "Exchange"]
-GENERAL_SUBCATEGORIES = ["Order Info", "Complaint Info", "Extra Parcel", "Delay Delivery", "Duplicate Ticket", "General"]
+REFUND_SUBCATEGORIES = ["Warranty Claim"]
+GENERAL_SUBCATEGORIES = ["Extra Parcel", "Delay Delivery", "General"]
 # Catch-all category used when a customer reports more than one distinct
 # complaint (e.g. a missing item AND a wrong item) in the same message, or
 # when their description can't be pinned to a single category after a retry.
 MISCELLANEOUS_SUBCATEGORIES = ["Miscellaneous"]
 
+# Allowed sub-categories per category - used to reject an LLM-extracted
+# category/sub-category that isn't (or is no longer) a valid complaint type.
+CATEGORY_SUBCATEGORIES = {
+    "Missing": MISSING_SUBCATEGORIES,
+    "Wrong": WRONG_SUBCATEGORIES,
+    "Refund": REFUND_SUBCATEGORIES,
+    "General": GENERAL_SUBCATEGORIES,
+    "Miscellaneous": MISCELLANEOUS_SUBCATEGORIES,
+}
+
 # Wrong-category sub-categories that require a photo upload
 WRONG_NEEDS_IMAGE = {"Wrong Product", "Damaged Product", "Expired Product", "Leak product", "Quality Issue"}
+# Sub-categories filed without asking the customer which order items the
+# complaint is about. Every other type shows the order's items to pick from,
+# and the picked ones are saved to nhd_complain_tickets_products_info.
+ITEMS_NOT_REQUIRED_CATEGORIES = {"Delay Delivery", "Extra Parcel"}
 # Of those, which ones ask a Receive Correct Item / Refund Money resolution question after the photo
 WRONG_NEEDS_RESOLUTION = {"Wrong Product", "Damaged Product", "Expired Product", "Leak product", "Quality Issue"}
 # Wrong-category sub-categories that just need a text description (no photo) - none currently
@@ -36,16 +51,9 @@ COMPLAINT_OPTIONS = [
     ("Wrong", "Expired Product", "Expired Product"),
     ("Wrong", "Leak product", "Leaking Product"),
     ("Wrong", "Quality Issue", "Quality Issue"),
-    ("Refund", "Refund", "Refund"),
     ("Refund", "Warranty Claim", "Warranty Claim"),
-    ("Refund", "Exchange", "Exchange"),
-    ("Refund", "Cashback", "Cashback"),
-    ("Refund", "Change of Mind", "Change of Mind"),
     ("General", "Delay Delivery", "Delayed Delivery"),
     ("General", "Extra Parcel", "Extra Parcel"),
-    ("General", "Order Info", "Order Info"),
-    ("General", "Complaint Info", "Complaint Info"),
-    ("General", "Duplicate Ticket", "Duplicate Ticket"),
     (None, "Other", "Other"),
 ]
 OTHER_COMPLAINT_TYPE = "Other"
@@ -74,6 +82,52 @@ def _resolve_complaint_option(user_msg: str):
     if text == "other":
         return COMPLAINT_OPTIONS[-1]
     return None
+
+
+# Prefix of the last line of the item-selection prompt: the items as JSON, which
+# the frontend renders as a product table (image, price, ordered/complaint qty)
+# in place of the plain numbered list.
+ITEM_PICKER_MARKER = "ITEM_PICKER::"
+
+
+def _item_selection_prompt(items: list, prefix: str) -> str:
+    # "one or more" tells the frontend to render this list as a multi-select.
+    lines = [prefix, "Please select the items you have a complaint about (you can select one or more):"]
+    for i, item in enumerate(items, start=1):
+        lines.append(f"{i}. {item['name']} (Qty: {item['qty']:g})")
+    lines.append("\nReply with the item numbers and complaint quantities (e.g. 1:2, 3 - the quantity is 1 if not given), or type 'all'.")
+    picker = [
+        {"n": i, "name": item["name"], "image_url": item.get("image_url"),
+         "price": item.get("price") or 0, "qty": item.get("qty") or 0}
+        for i, item in enumerate(items, start=1)
+    ]
+    lines.append(ITEM_PICKER_MARKER + json.dumps(picker))
+    return "\n".join(lines)
+
+
+def _parse_item_selection(user_msg: str, items: list) -> Optional[list]:
+    """Returns (0-based index, complaint qty) pairs picked by a reply like "2",
+    "1, 3", "1 and 3", "1:2, 3:1" or "all" (qty defaults to 1), else None -
+    also when a number is out of range or a qty exceeds the ordered qty."""
+    count = len(items)
+    text = (user_msg or "").strip().lower()
+    if text in {"all", "all items", "sab", "sab items"}:
+        return [(i, 1) for i in range(count)]
+    text = re.sub(r"\band\b|&", ",", text)
+    pair = r"\d{1,3}(?:\s*[:x×]\s*\d{1,4})?"
+    if not re.fullmatch(rf"\s*{pair}(?:[\s,]+{pair})*[\s,]*", text):
+        return None
+    picked = {}
+    for n, q in re.findall(r"(\d{1,3})(?:\s*[:x×]\s*(\d{1,4}))?", text):
+        idx = int(n) - 1
+        if not 0 <= idx < count:
+            return None
+        qty = int(q) if q else 1
+        ordered = float(items[idx].get("qty") or 0)
+        if qty < 1 or (ordered >= 1 and qty > ordered):
+            return None
+        picked[idx] = qty
+    return list(picked.items())
 
 
 def _match_subcategory(msg_lower: str, options) -> Optional[str]:
@@ -201,7 +255,7 @@ class ComplaintFlow(BaseFlow):
                         state.current_stage = None
                         return FlowResponse(
                             status="completed",
-                            response="We are sorry, but more than 7 days have passed since the delivery of your order. According to Naheed's return policy, the product cannot be returned. We apologize for any inconvenience.",
+                            response="I’m sorry, but more than 7 days have passed since your order was delivered. According to Naheed’s policy, we’re unable to register a complaint after this period. You can contact our Customer Support team at (021) 111-624-333 for further assistance.",
                         )
                 
                 # Verification successful, transition to description collection or skip if known
@@ -231,13 +285,14 @@ class ComplaintFlow(BaseFlow):
                     state.verification_attempts = 0
                     return FlowResponse(
                         status="completed",
-                        response="We were unable to verify the provided phone number. Please contact our Customer Support team at (021) 111-624-333 for further assistance.",
+                        response="I am unable to verify the provided phone number. Please contact our Customer Support team at (021) 111-624-333 for further assistance.",
                         tool_request="agent_handoff"
                     )
                 else:
                     return FlowResponse(
                         status="waiting_for_input",
-                        response="The phone number provided does not match our records. Please try again."
+                        # response="The phone number provided does not match our records. Please try again."
+                        response="I am unable to verify the provided phone number. Please contact our Customer Support team at (021) 111-624-333 for further assistance."
                     )
 
         # 2.8 Waiting for a numbered complaint-type selection
@@ -246,14 +301,15 @@ class ComplaintFlow(BaseFlow):
             if option:
                 category, sub_category, _ = option
                 if sub_category == OTHER_COMPLAINT_TYPE:
-                    return FlowResponse(
-                        status="waiting_for_input",
-                        response="Please type your complaint in your own words and we will register it.",
-                        updated_state={
-                            "current_flow": "complaint",
-                            "current_stage": "waiting_for_other_complaint"
-                        }
-                    )
+                    # "Other" may be filed more than once per order, so it skips
+                    # the duplicate check in _transition_to_subcategory.
+                    new_entities = {
+                        **state.entities,
+                        "complaint_category": None,
+                        "complaint_sub_category": OTHER_COMPLAINT_TYPE,
+                        "complaint_items": []
+                    }
+                    return self._ask_for_items(new_entities, "Sure.")
                 # Picked from the menu, so there is no typed description yet
                 return self._transition_to_subcategory(state, category, sub_category, "")
             # Free text instead of a number: categorize it like a description
@@ -275,7 +331,8 @@ class ComplaintFlow(BaseFlow):
                     "order_id": state.entities.get("order_id"),
                     "complaint_type": OTHER_COMPLAINT_TYPE,
                     "details": f"Sub-category: {OTHER_COMPLAINT_TYPE}. Details: {user_msg}",
-                    "image_url": None
+                    "image_url": None,
+                    "items": state.entities.get("complaint_items") or []
                 }
             )
 
@@ -284,6 +341,11 @@ class ComplaintFlow(BaseFlow):
             # Extract category & subcategory from entities (LLM output)
             category = entities.get("complaint_category") or state.entities.get("complaint_category")
             sub_category = entities.get("complaint_sub_category") or state.entities.get("complaint_sub_category")
+            if sub_category not in CATEGORY_SUBCATEGORIES.get(category, []):
+                # Not a valid complaint type (e.g. a removed one like "Refund" or
+                # "Cashback") - fall back to keyword matching below.
+                category = None
+                sub_category = None
 
             # Fallback keyword matching if LLM didn't resolve them
             if not category or not sub_category:
@@ -308,9 +370,9 @@ class ComplaintFlow(BaseFlow):
                     detected_categories.add("Missing")
                 if "wrong" in msg_lower or "kharab" in msg_lower or "expired" in msg_lower or "leak" in msg_lower or "damaged" in msg_lower or "broken" in msg_lower or "quality" in msg_lower:
                     detected_categories.add("Wrong")
-                if "refund" in msg_lower or "paisa" in msg_lower or "cashback" in msg_lower or "warranty" in msg_lower:
+                if "warranty" in msg_lower:
                     detected_categories.add("Refund")
-                if "delay" in msg_lower or "delivery" in msg_lower or "info" in msg_lower or "packet" in msg_lower or "extra" in msg_lower or "duplicate" in msg_lower:
+                if "delay" in msg_lower or "delivery" in msg_lower or "packet" in msg_lower or "extra" in msg_lower:
                     detected_categories.add("General")
 
                 if len(detected_categories) > 1:
@@ -347,23 +409,12 @@ class ComplaintFlow(BaseFlow):
                                 sub_category = "Damaged Product"
                             else:
                                 sub_category = "Wrong Product"
-                        elif "refund" in msg_lower or "paisa" in msg_lower or "cashback" in msg_lower or "warranty" in msg_lower or "exchange" in msg_lower or "replace" in msg_lower:
+                        elif "warranty" in msg_lower:
                             category = "Refund"
-                            if "warranty" in msg_lower:
-                                sub_category = "Warranty Claim"
-                            elif "cashback" in msg_lower:
-                                sub_category = "Cashback"
-                            elif "change of mind" in msg_lower:
-                                sub_category = "Change of Mind"
-                            elif "exchange" in msg_lower or "replace" in msg_lower:
-                                sub_category = "Exchange"
-                            else:
-                                sub_category = "Refund"
-                        elif "delay" in msg_lower or "delivery" in msg_lower or "info" in msg_lower or "packet" in msg_lower or "duplicate" in msg_lower:
+                            sub_category = "Warranty Claim"
+                        elif "delay" in msg_lower or "delivery" in msg_lower or "packet" in msg_lower or "extra" in msg_lower:
                             category = "General"
-                            if "duplicate" in msg_lower:
-                                sub_category = "Duplicate Ticket"
-                            elif "delay" in msg_lower:
+                            if "delay" in msg_lower:
                                 sub_category = "Delay Delivery"
                             elif "extra" in msg_lower:
                                 sub_category = "Extra Parcel"
@@ -439,10 +490,10 @@ class ComplaintFlow(BaseFlow):
                         "entities": {**state.entities, "complaint_category": "Wrong"}
                     }
                 )
-            elif "refund" in msg_lower or "exchange" in msg_lower or "replace" in msg_lower:
+            elif "refund" in msg_lower or "warranty" in msg_lower:
                 return FlowResponse(
                     status="waiting_for_input",
-                    response="Please select the sub-category:\n- Refund\n- Warranty Claim\n- Cashback\n- Change of Mind",
+                    response="Please select the sub-category:\n- Warranty Claim",
                     updated_state={
                         "current_flow": "complaint",
                         "current_stage": "waiting_for_refund_sub_category",
@@ -452,7 +503,7 @@ class ComplaintFlow(BaseFlow):
             elif "general" in msg_lower:
                 return FlowResponse(
                     status="waiting_for_input",
-                    response="Please select the sub-category:\n- Order Info\n- Complaint Info\n- Extra Parcel\n- Delay Delivery\n- Duplicate Ticket\n- General",
+                    response="Please select the sub-category:\n- Extra Parcel\n- Delay Delivery\n- General",
                     updated_state={
                         "current_flow": "complaint",
                         "current_stage": "waiting_for_general_sub_category",
@@ -480,18 +531,27 @@ class ComplaintFlow(BaseFlow):
 
         if current_stage == "waiting_for_general_sub_category":
             msg_lower = user_msg.lower()
-            if "order info" in msg_lower:
-                return self._transition_to_subcategory(state, "General", "Order Info", user_msg)
-            elif "complaint info" in msg_lower:
-                return self._transition_to_subcategory(state, "General", "Complaint Info", user_msg)
-            elif "extra parcel" in msg_lower:
+            if "extra parcel" in msg_lower:
                 return self._transition_to_subcategory(state, "General", "Extra Parcel", user_msg)
             elif "delay delivery" in msg_lower:
                 return self._transition_to_subcategory(state, "General", "Delay Delivery", user_msg)
-            elif "duplicate ticket" in msg_lower:
-                return self._transition_to_subcategory(state, "General", "Duplicate Ticket", user_msg)
             elif "general" in msg_lower:
                 return self._transition_to_subcategory(state, "General", "General", user_msg)
+
+        # 3.5 Waiting for the customer to pick the order items the complaint is about
+        if current_stage == "waiting_for_item_selection":
+            items = state.entities.get("complaint_order_items") or []
+            picked = _parse_item_selection(user_msg, items)
+            if not picked:
+                return FlowResponse(
+                    status="waiting_for_input",
+                    response=_item_selection_prompt(items, "Sorry, I couldn't understand your selection.")
+                )
+            new_entities = {
+                **state.entities,
+                "complaint_items": [{**items[i], "complaint_qty": qty} for i, qty in picked]
+            }
+            return self._ask_complaint_details(new_entities)
 
         # 4. Waiting for Image Upload (Wrong category sub-categories that need a photo)
         if current_stage == "waiting_for_image":
@@ -520,7 +580,8 @@ class ComplaintFlow(BaseFlow):
                         "order_id": order_id,
                         "complaint_type": sub_cat,
                         "details": details,
-                        "image_url": image_path
+                        "image_url": image_path,
+                        "items": state.entities.get("complaint_items") or []
                     }
                 )
             else:
@@ -558,6 +619,7 @@ class ComplaintFlow(BaseFlow):
                             "complaint_category": None,
                             "complaint_sub_category": None,
                             "unavailable_items": None,
+                            "complaint_items": [],
                             "complaint_desc_attempts": 0
                         }
                     }
@@ -601,7 +663,8 @@ class ComplaintFlow(BaseFlow):
                     "order_id": order_id,
                     "complaint_type": sub_cat,
                     "details": details,
-                    "image_url": image_url
+                    "image_url": image_url,
+                    "items": state.entities.get("complaint_items") or []
                 }
             )
 
@@ -611,10 +674,14 @@ class ComplaintFlow(BaseFlow):
             dispatch_missing = state.entities.get("dispatch_missing_items") or []
             is_cod = state.entities.get("is_cod", False)
             refund_status = state.entities.get("refund_status")
+            selected_items = state.entities.get("complaint_items") or []
             additional = user_msg.strip()
             no_additional = additional.lower() in ["no", "none", "nope", "n", "no.", "nahi", "nahi."]
 
             detail_parts = ["Sub-category: Missing Item."]
+            if selected_items:
+                missing = ", ".join(f"{item['name']} (Qty: {item.get('complaint_qty', 1):g})" for item in selected_items)
+                detail_parts.append(f"Items reported missing by customer: {missing}.")
             if dispatch_missing:
                 detail_parts.append(f"Items missing at dispatch: {', '.join(dispatch_missing)}.")
                 if is_cod:
@@ -622,16 +689,18 @@ class ComplaintFlow(BaseFlow):
                 else:
                     detail_parts.append(f"Refund status for dispatch-missing items: {refund_status or 'not yet initiated'}.")
             if not no_additional:
-                detail_parts.append(f"Additional items not received by customer: {additional}.")
+                label = "Details" if selected_items else "Additional items not received by customer"
+                detail_parts.append(f"{label}: {additional}.")
 
-            if no_additional and not dispatch_missing:
+            # When the customer picked the missing items, the ticket is always filed.
+            if no_additional and not dispatch_missing and not selected_items:
                 return FlowResponse(
                     status="completed",
                     response="Thank you. No missing items were reported. If you need further help, feel free to reach out.",
                     updated_state={"current_flow": None, "current_stage": None}
                 )
 
-            if no_additional and is_cod and dispatch_missing:
+            if no_additional and is_cod and dispatch_missing and not selected_items:
                 return FlowResponse(
                     status="completed",
                     response="Thank you. Since this was a COD order, no refund is applicable for the missing dispatch items. No complaint has been filed.",
@@ -647,7 +716,8 @@ class ComplaintFlow(BaseFlow):
                     "order_id": order_id,
                     "complaint_type": "Missing Item",
                     "details": " ".join(detail_parts),
-                    "image_url": None
+                    "image_url": None,
+                    "items": selected_items
                 }
             )
 
@@ -669,7 +739,8 @@ class ComplaintFlow(BaseFlow):
                     "order_id": order_id,
                     "complaint_type": sub_cat,
                     "details": details,
-                    "image_url": None
+                    "image_url": None,
+                    "items": state.entities.get("complaint_items") or []
                 }
             )
 
@@ -690,7 +761,8 @@ class ComplaintFlow(BaseFlow):
                     "order_id": order_id,
                     "complaint_type": "General",
                     "details": details,
-                    "image_url": None
+                    "image_url": None,
+                    "items": state.entities.get("complaint_items") or []
                 }
             )
 
@@ -718,7 +790,7 @@ class ComplaintFlow(BaseFlow):
                     if days_passed >= 7:
                         return FlowResponse(
                             status="completed",
-                            response="We are sorry, but more than 7 days have passed since the delivery of your order. According to Naheed's return policy, the product cannot be returned. We apologize for any inconvenience.",
+                            response="I’m sorry, but more than 7 days have passed since your order was delivered. According to Naheed’s policy, we’re unable to register a complaint after this period. You can contact our Customer Support team at (021) 111-624-333 for further assistance.",
                             updated_state={"current_flow": None, "current_stage": None}
                         )
                 # Direct to description collection instead of category menu
@@ -775,7 +847,9 @@ class ComplaintFlow(BaseFlow):
             # The message that actually described the issue - used for the ticket
             # details instead of the first message (which may be just a menu digit
             # or an order ID).
-            "complaint_description": user_description
+            "complaint_description": user_description,
+            # Order items the customer picks for this complaint (if asked)
+            "complaint_items": []
         }
 
         # Reject a duplicate complaint type up front, before asking the customer
@@ -792,6 +866,57 @@ class ComplaintFlow(BaseFlow):
             # ComplaintService re-checks before inserting, so a lookup failure
             # here shouldn't block the customer.
             pass
+
+        if sub_category in ITEMS_NOT_REQUIRED_CATEGORIES:
+            return self._ask_complaint_details(new_entities)
+        return self._ask_for_items(new_entities, f"I have noted this as a {sub_category.lower()} complaint.")
+
+    def _ask_for_items(self, new_entities: dict, prefix: str) -> FlowResponse:
+        # Ask which of the order's items the complaint is about before the
+        # description/photo. If the items can't be loaded, carry on without them.
+        try:
+            items = self.order_repository.get_order_items_for_complaint(new_entities.get("order_id", ""))
+        except Exception:
+            items = []
+        if len(items) == 1 and items[0]["qty"] <= 1:
+            # Only one item (qty 1) on the order, so it must be the one the
+            # complaint is about - attach it without asking. With a larger qty
+            # the customer is still asked how many units the complaint is for.
+            return self._ask_complaint_details(
+                {**new_entities, "complaint_items": [{**items[0], "complaint_qty": items[0]["qty"] or 1}]}
+            )
+        if items:
+            return FlowResponse(
+                status="waiting_for_input",
+                response=_item_selection_prompt(items, prefix),
+                updated_state={
+                    "current_flow": "complaint",
+                    "current_stage": "waiting_for_item_selection",
+                    "entities": {**new_entities, "complaint_order_items": items}
+                }
+            )
+        return self._ask_complaint_details(new_entities)
+
+    def _ask_complaint_details(self, new_entities: dict) -> FlowResponse:
+        # Asks for whatever the complaint type still needs (missing-item details,
+        # a photo or a description) before the ticket is filed.
+        order_id = new_entities.get("order_id", "")
+        parent_order_id = new_entities.get("parent_order_id", "")
+        category = new_entities.get("complaint_category")
+        sub_category = new_entities.get("complaint_sub_category")
+        items_selected = bool(new_entities.get("complaint_items"))
+
+        if sub_category == OTHER_COMPLAINT_TYPE:
+            prompt = "Please type your complaint in your own words and we will register it."
+            return FlowResponse(
+                status="waiting_for_input",
+                response=f"Thank you. {prompt}" if items_selected else prompt,
+                updated_state={
+                    "current_flow": "complaint",
+                    "current_stage": "waiting_for_other_complaint",
+                    "entities": new_entities
+                }
+            )
 
         if category == "Missing" and sub_category == "Missing Item":
             dispatch_missing = []
@@ -819,7 +944,12 @@ class ComplaintFlow(BaseFlow):
                         lines.append("A refund for these items is currently **in progress** and will be processed shortly.")
                     else:
                         lines.append("Our customer service team will **initiate a refund** for these items.")
-                lines.append("Were there any **other items** (besides the above) that you did not receive? If yes, please describe them. If no, type 'No'.")
+                if items_selected:
+                    lines.append("Please share any other details about your complaint. If there's nothing to add, type 'No'.")
+                else:
+                    lines.append("Were there any **other items** (besides the above) that you did not receive? If yes, please describe them. If no, type 'No'.")
+            elif items_selected:
+                lines.append("Thank you. Please describe your missing item issue in more detail. If there's nothing to add, type 'No'.")
             else:
                 lines.append("We have no record of items missing at dispatch for your order.")
                 lines.append("Please describe which items you did **not receive**.")
@@ -840,9 +970,10 @@ class ComplaintFlow(BaseFlow):
             )
 
         elif sub_category in WRONG_NEEDS_IMAGE:
+            noted = "Thank you." if items_selected else f"I have noted this as a {sub_category.lower()} complaint."
             return FlowResponse(
                 status="waiting_for_input",
-                response=f"I have registered this as a {sub_category.lower()} complaint. Please upload an image related to your complaint (you can also type a short description).",
+                response=f"{noted} Please upload an image related to your complaint (If you want, you can also type a short description).",
                 updated_state={
                     "current_flow": "complaint",
                     "current_stage": "waiting_for_image",
