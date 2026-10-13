@@ -331,6 +331,64 @@
   .option-submit:disabled { opacity: .5; cursor: default; }
   .option-list.used .option-submit { display: none; }
 
+  /* Complaint image upload panel (prompt ends with "IMAGE_UPLOAD::{...}") */
+  .image-upload { margin: 8px 0; display: flex; flex-direction: column; gap: 10px; }
+  .iu-drop {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 16px 12px;
+    border: 1.5px dashed var(--neutral-border);
+    border-radius: var(--radius-md);
+    background: var(--neutral-bg);
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
+  }
+  .iu-drop:hover, .iu-drop.dragover { border-color: var(--brand-red); color: var(--brand-red); }
+  .iu-drop .iu-icon { font-size: 22px; }
+  .iu-drop .iu-hint { font-size: 11.5px; color: var(--text-muted); }
+  .iu-drop input { display: none; }
+  .iu-grid, .msg-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+  .iu-grid:empty { display: none; }
+  .iu-thumb, .msg-image {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--neutral-border);
+    background: var(--neutral-bg);
+    overflow: hidden;
+  }
+  .iu-thumb img, .msg-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .msg-image { display: block; }
+  .msg-images { min-width: 180px; margin-top: 2px; }
+  .iu-remove {
+    position: absolute; top: 4px; right: 4px;
+    width: 22px; height: 22px;
+    border: none; border-radius: 4px;
+    background: rgba(26,26,46,.75);
+    color: #fff;
+    font-size: 12px; line-height: 1;
+    cursor: pointer;
+  }
+  .iu-remove:hover { background: var(--brand-red); }
+  .iu-footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-border); }
+  .iu-count { margin-right: auto; font-size: 12px; color: var(--text-muted); }
+  .iu-skip {
+    font: inherit; font-size: 13px;
+    background: #fff;
+    color: var(--text-secondary);
+    border: 1px solid var(--neutral-border);
+    border-radius: var(--radius-sm);
+    padding: 6px 14px;
+    cursor: pointer;
+  }
+  .iu-skip:hover { border-color: var(--brand-red); color: var(--brand-red); }
+  .skip-option { display: flex; justify-content: flex-end; margin-top: 8px; }
+  .skip-option.used { display: none; }
+  .image-upload.used { opacity: .6; }
+  .image-upload.used .iu-drop, .image-upload.used .iu-remove, .image-upload.used .iu-footer { display: none; }
+
   /* Product cards inside bubble */
   .product-grid {
     display: flex;
@@ -469,21 +527,6 @@
     line-height: 1.45;
   }
   #user-input::placeholder { color: var(--text-muted); }
-  .attach-btn {
-    width: 40px; height: 40px;
-    background: var(--neutral-bg);
-    color: var(--text-secondary);
-    border: 1.5px solid var(--neutral-border);
-    border-radius: 50%;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 16px;
-    flex-shrink: 0;
-    transition: border-color .15s, color .15s;
-  }
-  .attach-btn:hover { border-color: var(--brand-red); color: var(--brand-red); }
   .send-btn {
     width: 40px; height: 40px;
     background: var(--brand-red);
@@ -697,8 +740,6 @@
     </div>
 
     <div class="input-bar">
-      <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFileSelected(event)">
-      <button class="attach-btn" title="Attach an image (e.g. for a complaint)" onclick="document.getElementById('file-input').click()">📎</button>
       <div class="input-wrap">
         <textarea id="user-input" rows="1"
           placeholder="Ask NiaBot about a product, or your order…"
@@ -844,7 +885,7 @@
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble ' + (role === 'bot' ? 'bot' : 'user');
-    bubble.innerHTML = role === 'bot' ? renderBotContent(content) : renderText(content);
+    bubble.innerHTML = role === 'bot' ? renderBotContent(content) : renderUserContent(content);
 
     // Product cards
     if (products && products.length > 0) {
@@ -1021,8 +1062,48 @@
       </div>`;
   }
 
+  // A prompt asking for complaint photos ends with an "IMAGE_UPLOAD::{...}" line
+  // ({"optional": bool}). It is rendered as an upload panel: pick one or more
+  // images, review/remove the thumbnails, then Upload (or Skip, if optional).
+  const IMAGE_UPLOAD_RE = /^IMAGE_UPLOAD::(.+)$/m;
+  const MAX_UPLOAD_IMAGES = 10;
+  const uploadFiles = new WeakMap();   // panel element -> selected File[]
+
+  function renderImageUpload(text, opts) {
+    const intro = text.replace(IMAGE_UPLOAD_RE, '').replace(/^\n+|\n+$/g, '');
+    return (intro ? `<div>${renderText(intro)}</div>` : '') + `
+      <div class="image-upload">
+        <label class="iu-drop">
+          <input type="file" class="iu-input" accept="image/*" multiple>
+          <span class="iu-icon">📷</span>
+          <strong>Choose images</strong>
+          <span class="iu-hint">JPG, PNG, GIF or WEBP · up to ${MAX_UPLOAD_IMAGES} images</span>
+        </label>
+        <div class="iu-grid"></div>
+        <div class="iu-footer">
+          <span class="iu-count">No images selected</span>
+          ${opts.optional ? '<button type="button" class="iu-skip">Skip</button>' : ''}
+          <button type="button" class="option-submit iu-submit" disabled>Upload</button>
+        </div>
+      </div>`;
+  }
+
+  // A prompt for an optional answer ends with a "SKIP_OPTION::" line, shown as
+  // a Skip button that replies "skip".
+  const SKIP_OPTION_RE = /^SKIP_OPTION::.*$/m;
+
   function renderBotContent(s) {
     const raw = String(s || '');
+    if (SKIP_OPTION_RE.test(raw)) {
+      return renderText(raw.replace(SKIP_OPTION_RE, '').replace(/\n+$/, ''))
+        + '<div class="skip-option"><button type="button" class="iu-skip skip-btn">Skip</button></div>';
+    }
+    const upload = raw.match(IMAGE_UPLOAD_RE);
+    if (upload) {
+      let opts = {};
+      try { opts = JSON.parse(upload[1]) || {}; } catch (e) { /* not optional */ }
+      return renderImageUpload(raw, opts);
+    }
     const picker = raw.match(ITEM_PICKER_RE);
     if (picker) {
       try {
@@ -1117,6 +1198,11 @@
       picker.querySelectorAll('input, select, button').forEach(el => { el.disabled = true; });
       picker.classList.add('used');
     });
+    document.querySelectorAll('.skip-option:not(.used)').forEach(el => el.classList.add('used'));
+    document.querySelectorAll('.image-upload:not(.used)').forEach(panel => {
+      panel.querySelectorAll('input, button').forEach(el => { el.disabled = true; });
+      panel.classList.add('used');
+    });
   }
 
   // Complaint item picker: a ticked row is highlighted, Submit needs one ticked.
@@ -1159,27 +1245,103 @@
     postChatMessage(btn.dataset.n, btn.dataset.label);
   });
 
-  // ─── Image attachment (complaint flow etc.) ────────────────────────────────
-  async function handleFileSelected(event) {
-    const file = event.target.files[0];
-    event.target.value = '';
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    showToast('Uploading image…');
-    try {
-      const res = await fetch('/api/upload', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (data.error) {
-        showToast(data.error, 'red');
-        return;
-      }
-      await postChatMessage(`[Image Uploaded: ${data.url}]`, '📎 Image attached');
-    } catch (err) {
-      showToast('Upload failed. Please try again.', 'red');
+  // ─── Complaint image upload panel ─────────────────────────────────────────
+  function addUploadFiles(panel, fileList) {
+    const files = uploadFiles.get(panel) || [];
+    const images = [...fileList].filter(f => f.type.startsWith('image/'));
+    if (images.length < fileList.length) showToast('Only image files can be uploaded.', 'red');
+    files.push(...images);
+    if (files.length > MAX_UPLOAD_IMAGES) {
+      files.length = MAX_UPLOAD_IMAGES;
+      showToast(`You can upload up to ${MAX_UPLOAD_IMAGES} images.`, 'red');
     }
+    uploadFiles.set(panel, files);
+    renderUploadThumbs(panel);
+  }
+
+  function renderUploadThumbs(panel) {
+    const files = uploadFiles.get(panel) || [];
+    const grid = panel.querySelector('.iu-grid');
+    grid.querySelectorAll('img').forEach(img => URL.revokeObjectURL(img.src));
+    grid.innerHTML = files.map((f, i) => `
+      <div class="iu-thumb">
+        <img src="${URL.createObjectURL(f)}" alt="${escapeAttr(f.name)}">
+        <button type="button" class="iu-remove" data-i="${i}" title="Remove" aria-label="Remove ${escapeAttr(f.name)}">✕</button>
+      </div>`).join('');
+    panel.querySelector('.iu-count').textContent = files.length
+      ? `${files.length} image${files.length > 1 ? 's' : ''} selected`
+      : 'No images selected';
+    panel.querySelector('.iu-submit').disabled = !files.length;
+  }
+
+  async function submitUploadPanel(panel) {
+    const files = uploadFiles.get(panel) || [];
+    if (!files.length) return;
+    const submit = panel.querySelector('.iu-submit');
+    panel.querySelectorAll('input, button').forEach(el => { el.disabled = true; });
+    submit.textContent = 'Uploading…';
+    try {
+      const urls = await Promise.all(files.map(async file => {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.error || !data.url) throw new Error(data.error || 'Upload failed');
+        return data.url;
+      }));
+      const msg = `[Images Uploaded: ${urls.join(', ')}]`;
+      await postChatMessage(msg, msg);
+    } catch (err) {
+      showToast(err.message && err.message !== 'Failed to fetch' ? err.message : 'Upload failed. Please try again.', 'red');
+      panel.querySelectorAll('input, button').forEach(el => { el.disabled = false; });
+      submit.textContent = 'Upload';
+    }
+  }
+
+  const messagesEl = document.getElementById('messages');
+  messagesEl.addEventListener('change', e => {
+    const input = e.target.closest('.image-upload .iu-input');
+    if (!input) return;
+    addUploadFiles(input.closest('.image-upload'), input.files);
+    input.value = '';
+  });
+  messagesEl.addEventListener('click', e => {
+    if (e.target.closest('.skip-option:not(.used) .skip-btn') && !document.getElementById('send-btn').disabled) {
+      postChatMessage('skip', 'Skip');
+      return;
+    }
+    const panel = e.target.closest('.image-upload:not(.used)');
+    if (!panel || document.getElementById('send-btn').disabled) return;
+    const remove = e.target.closest('.iu-remove');
+    if (remove) {
+      uploadFiles.get(panel).splice(Number(remove.dataset.i), 1);
+      renderUploadThumbs(panel);
+    } else if (e.target.closest('.iu-submit')) {
+      submitUploadPanel(panel);
+    } else if (e.target.closest('.iu-skip')) {
+      postChatMessage('[Image Skipped]', '[Image Skipped]');
+    }
+  });
+  ['dragover', 'dragleave', 'drop'].forEach(type => messagesEl.addEventListener(type, e => {
+    const drop = e.target.closest('.image-upload:not(.used) .iu-drop');
+    if (!drop) return;
+    e.preventDefault();
+    drop.classList.toggle('dragover', type === 'dragover');
+    if (type === 'drop') addUploadFiles(drop.closest('.image-upload'), e.dataTransfer.files);
+  }));
+
+  // The customer's "[Images Uploaded: url, url]" message is shown as thumbnails.
+  const IMAGES_MSG_RE = /^\[Images? Uploaded:\s*([^\]]+)\]$/i;
+  function renderUserContent(s) {
+    const text = String(s || '').trim();
+    if (/^\[Image Skipped\]$/i.test(text)) return renderText('Skipped image upload');
+    const m = text.match(IMAGES_MSG_RE);
+    if (!m) return renderText(text);
+    const urls = m[1].split(',').map(u => u.trim()).filter(Boolean);
+    return `<div class="msg-images">` + urls.map(u => `
+      <a class="msg-image" href="${escapeAttr(u)}" target="_blank" rel="noopener noreferrer">
+        <img src="${escapeAttr(u)}" alt="Uploaded image" onerror="this.replaceWith(document.createTextNode('📷'))">
+      </a>`).join('') + `</div>`;
   }
 
   // ─── Quick add from product card ──────────────────────────────────────────

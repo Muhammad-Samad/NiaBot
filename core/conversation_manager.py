@@ -116,7 +116,7 @@ class ConversationManager:
 
         # 0.1 Check Word Limit
         word_limit = int(os.getenv("MAX_INPUT_WORDS", "100"))
-        if not message.startswith("[Image Uploaded:") and len(message.split()) > word_limit:
+        if not message.startswith(("[Image Uploaded:", "[Images Uploaded:")) and len(message.split()) > word_limit:
             self.audit_service.log_event(
                 event_type=AuditEvent.RATE_LIMIT,
                 category=AuditCategory.SECURITY,
@@ -323,13 +323,13 @@ class ConversationManager:
             order_id = flow_response.tool_args.get("order_id")
             complaint_type = flow_response.tool_args.get("complaint_type")
             details = flow_response.tool_args.get("details")
-            image_url = flow_response.tool_args.get("image_url")
+            image_urls = flow_response.tool_args.get("image_urls") or []
             logger.debug(f"Routing to ComplaintService for Order ID: {order_id} (priority={state.priority}, mood={state.mood})")
             service_response = self.complaint_service.create_complaint(
                 order_id=order_id,
                 complaint_type=complaint_type,
                 details=details,
-                image_url=image_url,
+                image_urls=image_urls,
                 priority=state.priority,
                 mood=state.mood,
                 items=flow_response.tool_args.get("items")

@@ -16,7 +16,7 @@ class ComplaintService:
         self.order_repository = order_repository or OrderRepository()
         self.audit_service = audit_service or AuditService()
 
-    def create_complaint(self, order_id: str, complaint_type: str, details: str, image_url: str = None, priority: str = "low", mood: str = "happy", items: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def create_complaint(self, order_id: str, complaint_type: str, details: str, image_urls: List[str] = None, priority: str = "low", mood: str = "happy", items: List[Dict[str, Any]] = None) -> Dict[str, Any]:
         start_time = time.time()
         try:
             # Check for duplicate complaint type. "Other" complaints are free text
@@ -54,7 +54,7 @@ class ComplaintService:
                 mood=mood or "happy"
             )
 
-            if image_url:
+            for image_url in image_urls or []:
                 self.complaint_repository.add_ticket_attachment(ticket_no, image_url)
 
             if items:

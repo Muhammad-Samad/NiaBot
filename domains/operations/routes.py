@@ -8,9 +8,12 @@ upload used by the complaint flow.
 import os
 import uuid
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_from_directory
 
 operations_bp = Blueprint("operations", __name__, url_prefix="/api")
+# Serves uploaded attachments back at the URL /api/upload returns, so the chat
+# can show thumbnails of the customer's images (also when history reloads).
+attachments_bp = Blueprint("attachments", __name__)
 
 # UPLOAD_DIR = os.path.join("static", "uploads")
 UPLOAD_DIR = os.path.join("uploads", "tickets", "attachments")
@@ -19,9 +22,9 @@ ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp"}
 
 @operations_bp.route("/upload", methods=["POST"])
 def upload_file():
-    """Image upload for complaint attachments. The frontend uploads the file
-    first, then sends the returned URL back as a chat message
-    ("[Image Uploaded: <url>]") — core/conversation_manager.py special-cases
+    """Image upload for complaint attachments. The frontend uploads the files
+    one file per call, then sends all the returned URLs back as one chat message
+    ("[Images Uploaded: <url>, <url>]") — core/conversation_manager.py special-cases
     that exact prefix when enforcing the message word limit."""
     file = request.files.get("file")
     if not file or not file.filename:
@@ -38,3 +41,8 @@ def upload_file():
 
     # return jsonify({"url": f"/static/uploads/{unique_filename}"})
     return jsonify({"url": f"/uploads/tickets/attachments/ticketattachment_{unique_filename}"})
+
+
+@attachments_bp.route("/uploads/tickets/attachments/<path:filename>")
+def ticket_attachment(filename):
+    return send_from_directory(os.path.abspath(UPLOAD_DIR), filename)

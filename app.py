@@ -26,7 +26,7 @@ logger = get_logger(__name__)
 
 from domains.shopping import repository as shopping_repository
 from domains.shopping.routes import shopping_bp
-from domains.operations.routes import operations_bp
+from domains.operations.routes import attachments_bp, operations_bp
 from domains.policy import service as policy_service
 from domains.policy.routes import policy_bp
 from router import domain_router
@@ -36,6 +36,7 @@ app.secret_key = base_config.FLASK_SECRET_KEY
 
 app.register_blueprint(shopping_bp)
 app.register_blueprint(operations_bp)
+app.register_blueprint(attachments_bp)
 app.register_blueprint(policy_bp)
 
 # Open the DB connection pool at startup - creating it takes ~15s (every

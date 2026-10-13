@@ -28,13 +28,13 @@ CATEGORY_SUBCATEGORIES = {
 }
 
 # Wrong-category sub-categories that require a photo upload
-WRONG_NEEDS_IMAGE = {"Wrong Product", "Damaged Product", "Expired Product", "Leak product", "Quality Issue"}
+WRONG_NEEDS_IMAGE = {"Wrong Product", "Damaged Product", "Expired Product", "Leak product", "Quality Issue", "Missing Accessories", "Warranty Claim", "Extra Parcel", "Other"}
 # Sub-categories filed without asking the customer which order items the
 # complaint is about. Every other type shows the order's items to pick from,
 # and the picked ones are saved to nhd_complain_tickets_products_info.
 ITEMS_NOT_REQUIRED_CATEGORIES = {"Delay Delivery", "Extra Parcel"}
 # Of those, which ones ask a Receive Correct Item / Refund Money resolution question after the photo
-WRONG_NEEDS_RESOLUTION = {"Wrong Product", "Damaged Product", "Expired Product", "Leak product", "Quality Issue"}
+WRONG_NEEDS_RESOLUTION = {"Wrong Product", "Damaged Product", "Expired Product", "Leak product", "Quality Issue","Missing Accessories", "Warranty Claim", "Extra Parcel", "Other"}
 # Wrong-category sub-categories that just need a text description (no photo) - none currently
 WRONG_SIMPLE = set()
 
@@ -103,6 +103,36 @@ def _item_selection_prompt(items: list, prefix: str) -> str:
     ]
     lines.append(ITEM_PICKER_MARKER + json.dumps(picker))
     return "\n".join(lines)
+
+
+# Prefix of the last line of an image-upload prompt: {"optional": bool} as JSON.
+# The frontend renders it as an upload panel (multiple images, thumbnails, and
+# a Skip button when optional) - there is no image upload anywhere else.
+IMAGE_UPLOAD_MARKER = "IMAGE_UPLOAD::"
+# What the upload panel sends back: "[Images Uploaded: <url>, <url>]" (the older
+# single "[Image Uploaded: <url>]" form is still accepted), or "[Image Skipped]".
+IMAGES_UPLOADED_RE = re.compile(r"\[Images? Uploaded:\s*([^\]]+)\]", re.IGNORECASE)
+SKIP_WORDS = {"skip", "[image skipped]", "no", "none", "nope", "n", "nahi"}
+
+
+def _image_upload_prompt(text: str, optional: bool = False) -> str:
+    return f"{text}\n{IMAGE_UPLOAD_MARKER}{json.dumps({'optional': optional})}"
+
+
+# Last line of a prompt for an optional answer: the frontend shows a Skip button
+# under it that replies "skip".
+SKIP_OPTION_MARKER = "SKIP_OPTION::"
+
+
+def _skippable_prompt(text: str) -> str:
+    return f"{text}\n{SKIP_OPTION_MARKER}"
+
+
+def _parse_uploaded_images(user_msg: str) -> list:
+    match = IMAGES_UPLOADED_RE.search(user_msg or "")
+    if not match:
+        return []
+    return [url.strip() for url in match.group(1).split(",") if url.strip()]
 
 
 def _parse_item_selection(user_msg: str, items: list) -> Optional[list]:
@@ -322,17 +352,17 @@ class ComplaintFlow(BaseFlow):
                     status="waiting_for_input",
                     response="Please type your complaint in your own words and we will register it."
                 )
+            # Photos are optional for "Other" - offer the upload panel with a Skip.
             return FlowResponse(
-                status="completed",
-                response="",
-                updated_state={"current_flow": None, "current_stage": None},
-                tool_request="create_complaint",
-                tool_args={
-                    "order_id": state.entities.get("order_id"),
-                    "complaint_type": OTHER_COMPLAINT_TYPE,
-                    "details": f"Sub-category: {OTHER_COMPLAINT_TYPE}. Details: {user_msg}",
-                    "image_url": None,
-                    "items": state.entities.get("complaint_items") or []
+                status="waiting_for_input",
+                response=_image_upload_prompt(
+                    "Thank you, noted. If you have any pictures related to your complaint, please upload them. Otherwise, you can skip this step.",
+                    optional=True
+                ),
+                updated_state={
+                    "current_flow": "complaint",
+                    "current_stage": "waiting_for_image",
+                    "entities": {**state.entities, "complaint_description": user_msg}
                 }
             )
 
@@ -451,7 +481,7 @@ class ComplaintFlow(BaseFlow):
                             "order_id": order_id,
                             "complaint_type": "Miscellaneous",
                             "details": details,
-                            "image_url": None
+                            "image_urls": []
                         }
                     )
                 return FlowResponse(
@@ -553,54 +583,58 @@ class ComplaintFlow(BaseFlow):
             }
             return self._ask_complaint_details(new_entities)
 
-        # 4. Waiting for Image Upload (Wrong category sub-categories that need a photo)
+        # 4. Waiting for Image Upload (one or more photos; optional for "Other")
         if current_stage == "waiting_for_image":
-            # Try to extract an image URL. Support both bracketed format and plain 'image received' phrase.
-            image_match = re.search(r'\[Image Uploaded:\s*([^\]]+)\]|\bimage received\b', user_msg, re.IGNORECASE)
             sub_cat = state.entities.get("complaint_sub_category", "Wrong Product")
-            if image_match:
-                # If the bracketed format matched, extract the URL; otherwise use a placeholder.
-                image_path = image_match.group(1).strip() if image_match.group(1) else 'uploaded_image_placeholder'
-
-                order_id = state.entities.get("order_id")
-                description = state.entities.get("complaint_description")
-                if description is None:
-                    description = state.entities.get("initial_complaint_description", "")
-                details = f"Sub-category: {sub_cat}." + (f" Details: {description}" if description else "")
-                return FlowResponse(
-                    status="completed",
-                    response="",
-                    updated_state={
-                        "current_flow": None,
-                        "current_stage": None,
-                        "show_upload": False
-                    },
-                    tool_request="create_complaint",
-                    tool_args={
-                        "order_id": order_id,
-                        "complaint_type": sub_cat,
-                        "details": details,
-                        "image_url": image_path,
-                        "items": state.entities.get("complaint_items") or []
-                    }
-                )
-            else:
-                # Text instead of a photo (common after picking the type from the
-                # menu): keep it as the complaint description, then ask again.
-                updated_state = {
-                    "current_flow": "complaint",
-                    "current_stage": "waiting_for_image",
-                    "show_upload": True
-                }
-                prompt = f"Please upload an image related to your {sub_cat.lower()} complaint to proceed."
-                if user_msg:
-                    updated_state["entities"] = {**state.entities, "complaint_description": user_msg}
-                    prompt = f"Thank you, noted. {prompt}"
+            optional = sub_cat == OTHER_COMPLAINT_TYPE
+            image_urls = _parse_uploaded_images(user_msg)
+            if not image_urls and re.search(r"\bimage received\b", user_msg, re.IGNORECASE):
+                image_urls = ["uploaded_image_placeholder"]
+            skipped = optional and user_msg.lower() in SKIP_WORDS
+            if image_urls or skipped:
+                if state.entities.get("complaint_description"):
+                    return self._file_image_complaint(state.entities, image_urls)
+                # Type picked from the menu, so nothing describes the issue yet:
+                # ask for a description as a separate, optional step.
                 return FlowResponse(
                     status="waiting_for_input",
-                    response=prompt,
-                    updated_state=updated_state
+                    response=_skippable_prompt(
+                        "Thank you. Would you like to add a short description of the issue? Type it below, or skip this step."
+                    ),
+                    updated_state={
+                        "current_flow": "complaint",
+                        "current_stage": "waiting_for_image_description",
+                        "entities": {**state.entities, "image_urls": image_urls}
+                    }
                 )
+            # Text instead of a photo: keep it as the complaint description
+            # (added to what "Other" already typed), then ask again.
+            updated_state = {"current_flow": "complaint", "current_stage": "waiting_for_image"}
+            if optional:
+                prompt = "Please upload pictures related to your complaint, or skip this step."
+            else:
+                prompt = f"Please upload an image related to your {sub_cat.lower()} complaint to proceed."
+            if user_msg.lower() in SKIP_WORDS:
+                prompt = f"An image is required for a {sub_cat.lower()} complaint. {prompt}"
+            elif user_msg:
+                description = user_msg
+                if optional and state.entities.get("complaint_description"):
+                    description = f"{state.entities['complaint_description']} {user_msg}"
+                updated_state["entities"] = {**state.entities, "complaint_description": description}
+                prompt = f"Thank you, noted. {prompt}"
+            return FlowResponse(
+                status="waiting_for_input",
+                response=_image_upload_prompt(prompt, optional=optional),
+                updated_state=updated_state
+            )
+
+        # 4.5 Optional description after the images were uploaded
+        if current_stage == "waiting_for_image_description":
+            description = "" if user_msg.lower() in SKIP_WORDS else user_msg
+            return self._file_image_complaint(
+                {**state.entities, "complaint_description": description},
+                state.entities.get("image_urls") or []
+            )
 
         # 5. Waiting for Resolution
         if current_stage == "waiting_for_resolution":
@@ -646,7 +680,6 @@ class ComplaintFlow(BaseFlow):
 
             # All details collected! Complete ticket registration.
             order_id = state.entities.get("order_id")
-            image_url = state.entities.get("image_url")
             description = state.entities.get("complaint_description") or state.entities.get("initial_complaint_description", "")
             details = f"Sub-category: {sub_cat}. Resolution: {resolution}. Details: {description}".strip()
 
@@ -663,7 +696,7 @@ class ComplaintFlow(BaseFlow):
                     "order_id": order_id,
                     "complaint_type": sub_cat,
                     "details": details,
-                    "image_url": image_url,
+                    "image_urls": state.entities.get("image_urls") or [],
                     "items": state.entities.get("complaint_items") or []
                 }
             )
@@ -716,7 +749,7 @@ class ComplaintFlow(BaseFlow):
                     "order_id": order_id,
                     "complaint_type": "Missing Item",
                     "details": " ".join(detail_parts),
-                    "image_url": None,
+                    "image_urls": [],
                     "items": selected_items
                 }
             )
@@ -739,7 +772,7 @@ class ComplaintFlow(BaseFlow):
                     "order_id": order_id,
                     "complaint_type": sub_cat,
                     "details": details,
-                    "image_url": None,
+                    "image_urls": [],
                     "items": state.entities.get("complaint_items") or []
                 }
             )
@@ -761,7 +794,7 @@ class ComplaintFlow(BaseFlow):
                     "order_id": order_id,
                     "complaint_type": "General",
                     "details": details,
-                    "image_url": None,
+                    "image_urls": [],
                     "items": state.entities.get("complaint_items") or []
                 }
             )
@@ -871,6 +904,24 @@ class ComplaintFlow(BaseFlow):
             return self._ask_complaint_details(new_entities)
         return self._ask_for_items(new_entities, f"I have noted this as a {sub_category.lower()} complaint.")
 
+    def _file_image_complaint(self, entities: dict, image_urls: list) -> FlowResponse:
+        sub_cat = entities.get("complaint_sub_category", "Wrong Product")
+        description = entities.get("complaint_description")
+        details = f"Sub-category: {sub_cat}." + (f" Details: {description}" if description else "")
+        return FlowResponse(
+            status="completed",
+            response="",
+            updated_state={"current_flow": None, "current_stage": None},
+            tool_request="create_complaint",
+            tool_args={
+                "order_id": entities.get("order_id"),
+                "complaint_type": sub_cat,
+                "details": details,
+                "image_urls": image_urls,
+                "items": entities.get("complaint_items") or []
+            }
+        )
+
     def _ask_for_items(self, new_entities: dict, prefix: str) -> FlowResponse:
         # Ask which of the order's items the complaint is about before the
         # description/photo. If the items can't be loaded, carry on without them.
@@ -973,11 +1024,12 @@ class ComplaintFlow(BaseFlow):
             noted = "Thank you." if items_selected else f"I have noted this as a {sub_category.lower()} complaint."
             return FlowResponse(
                 status="waiting_for_input",
-                response=f"{noted} Please upload an image related to your complaint (If you want, you can also type a short description).",
+                response=_image_upload_prompt(
+                    f"{noted} Please upload one or more images related to your complaint."
+                ),
                 updated_state={
                     "current_flow": "complaint",
                     "current_stage": "waiting_for_image",
-                    "show_upload": True,
                     "entities": new_entities
                 }
             )
