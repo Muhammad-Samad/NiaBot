@@ -39,19 +39,19 @@ class ComplaintTrackingService:
                 created_at = row.get("created_at")
                 action_taken = row.get("action_taken")
 
-                category = f"{subject} ({c_type})" if c_type else subject
+                # category = f"{subject} ({c_type})" if c_type else subject
                 date_str = created_at.strftime("%d %b %Y") if hasattr(created_at, "strftime") else "Unknown Date"
                 
                 msg = f"Complaint {idx}\n"
                 msg += f"Ticket No: {ticket_no}\n"
                 msg += f"Status: {status}\n"
-                msg += f"Category:\n{category}\n"
-                msg += f"Created:\n{date_str}\n"
+                msg += f"Type: {c_type}\n"
+                msg += f"Created: {date_str}\n"
                 
                 if action_taken:
-                    msg += f"Latest Update:\n{action_taken}"
+                    msg += f"Latest Update: {action_taken}\n"
                 else:
-                    msg += "Latest Update:\nNo update yet."
+                    msg += "Latest Update: No update yet.\n"
                 
                 message_lines.append(msg)
                 
