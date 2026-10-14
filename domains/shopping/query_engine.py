@@ -269,12 +269,34 @@ def is_followup_fragment(user_msg: str) -> bool:
     return any(p.fullmatch(msg) for p in _FOLLOWUP_PATTERNS)
 
 
+# Generic list items that pull in off-category products (e.g. "Cheese" also
+# matches "Kurkure Cheese Puff Balls") are swapped for a more specific search
+# term. Keys are lowercase and matched against the WHOLE item, so "Cheddar
+# Cheese" or "Chicken meat" are left alone. Add new entries here.
+ITEM_SYNONYMS = {
+    "chicken": "Chicken meat",
+    "egg": "Farm Eggs",
+    "eggs": "Farm Eggs",
+    "cheese": "Shredded Cheese",
+}
+
+
+def _apply_item_synonyms(items: list[str]) -> list[str]:
+    mapped = []
+    for item in items:
+        item = ITEM_SYNONYMS.get(item.lower(), item)
+        if item.lower() not in (m.lower() for m in mapped):
+            mapped.append(item)
+    return mapped
+
+
 def _clean_items(raw) -> list[str]:
     if isinstance(raw, str):
         raw = raw.split(",")
     if not isinstance(raw, list):
         return []
-    return [str(i).strip() for i in raw if str(i).strip()]
+    items = [re.sub(r"\s+", " ", str(i)).strip() for i in raw if str(i).strip()]
+    return _apply_item_synonyms(items)
 
 
 def _expand_to_list(user_msg: str) -> list[str]:
