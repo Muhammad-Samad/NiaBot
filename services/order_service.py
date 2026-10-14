@@ -140,6 +140,7 @@ class OrderService:
                 lines.append("\nTracking Information:")
                 if active_order.tracking_number:
                     lines.append(f"Courier: {active_order.carrier_code or 'Unknown'}")
+                    lines.append(f"Courier Status: {active_order.courier_status or 'Unknown'}")
                     lines.append(f"Tracking Number: {active_order.tracking_number}")
                     url = self._get_courier_url(active_order.carrier_code, active_order.tracking_number)
                     if url:
@@ -224,7 +225,7 @@ class OrderService:
             )
             return {
                 "success": False,
-                "message": "Technical difficulties.",
+                "message": "We’re experiencing some technical difficulties. Please try again later. We apologize for the inconvenience.",
                 "status": None,
                 "order": None
             }

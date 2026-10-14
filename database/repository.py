@@ -268,6 +268,7 @@ class OrderRepository:
             o.relation_parent_real_id,
             a.delivery_due_date,
             a.courier,
+            a.courier_status,
             a.cn_number,
             addr.city,
             addr.firstname,
@@ -354,6 +355,7 @@ class OrderRepository:
             recipient_phone=result["telephone"],
             shipping_address=result["street"],
             carrier_code=result["courier"],
+            courier_status=result["courier_status"],
             tracking_number=result["cn_number"]
         )
         
@@ -371,7 +373,7 @@ class OrderRepository:
 
     def get_order_by_increment_id(self, increment_id: str) -> Order:
         import os
-        mock_fallback = os.getenv("DB_MOCK_FALLBACK", "false").lower() == "true"
+        # mock_fallback = os.getenv("DB_MOCK_FALLBACK", "false").lower() == "true"
         try:
             with DatabaseManager() as conn:
                 logger.debug(f"Fetching order with increment_id: {increment_id}")
@@ -437,31 +439,6 @@ class OrderRepository:
         except OrderNotFoundError:
             raise
         except Exception as e:
-            if mock_fallback:
-                logger.warning(f"Database error ({e}), but DB_MOCK_FALLBACK is enabled. Returning mock order.")
-                last_char = increment_id[-1] if increment_id else "0"
-                if last_char in ["0", "2", "4", "6", "8"]:
-                    status = "shipped"
-                elif last_char in ["1", "3", "5", "7"]:
-                    status = "processing"
-                else:
-                    status = "packed"
-                
-                from database.schema import Order
-                from datetime import datetime, timedelta
-                return Order(
-                    entity_id=99999,
-                    increment_id=increment_id,
-                    status=status,
-                    estimated_delivery_datetime=datetime.now() + timedelta(days=2),
-                    shipping_city="Karachi",
-                    recipient_name="Mock Customer",
-                    recipient_phone="03001234567",
-                    shipping_address="123 Mock Street",
-                    carrier_code="lcsshipping",
-                    tracking_number="LCS12345678"
-                )
-            else:
                 logger.error(f"Database error while fetching order {increment_id}: {e}")
                 raise RuntimeError(f"Database error: {e}") from e
 

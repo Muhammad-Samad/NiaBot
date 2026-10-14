@@ -14,6 +14,7 @@ class Order:
     recipient_phone: Optional[str] = None
     shipping_address: Optional[str] = None
     carrier_code: Optional[str] = None
+    courier_status: Optional[str] = None
     tracking_number: Optional[str] = None
     
     # Parent-Child Tracking Extensions
