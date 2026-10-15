@@ -177,8 +177,9 @@ _LIST_RULES = """
   - "baby products"                 -> ["Diapers", "Baby Wipes", "Feeding Bottle", "Baby Lotion", "Baby Shampoo", "Baby Cereal", "Pacifier", "Baby Powder"]
   - "kitchen items"                 -> ["Non Stick Pan", "Pressure Cooker", "Knife Set", "Cutting Board", "Storage Containers", "Spatula", "Dinner Set"]
   - "camping"                       -> ["Tent", "Sleeping Bag", "Torch", "Water Bottle", "Portable Stove", "Insect Repellent", "Cooler Box"]
-  - "breakfast"                     -> ["Paratha", "Farm Eggs", "Bread", "Dairy Butter", "Honey", "Jam", "Oatmeal", "Tea", "Juice"]
   - "Chicken Biryani Ingredients"   -> ["Chicken meat", "Basmati Rice", "Yogurt", "Onion (Pyaaz)", "Tomato (Tamatar)", "Ginger Powder", "Garlic (Lehsan)", "Green Chilli", "Coriander (Dhania) leaves"]
+  - "breakfast"                     -> ["Paratha", "Farm Eggs", "Bread", "Dairy Butter", "Honey", "Jam", "Oatmeal", "Tea", "Juice"]
+  - "dairy products"                -> ['Milk', 'Yogurt','Farm Eggs', 'Butter', 'Shredded Cheese', 'Cream', 'Paneer', 'Desi Ghee']
   - "birthday party"                -> ["Balloons", "Cake", "Candles", "Paper Plates", "Paper Cups", "Streamers", "Chocolates", "Party Hats"]
   - "something for my wife"         -> ["Perfume", "Handbag", "Jewelry Set", "Makeup Kit", "Skincare Set", "Watch"]
 """
