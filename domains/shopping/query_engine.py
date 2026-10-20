@@ -67,10 +67,30 @@ def is_acknowledgement(user_msg: str):
 _NUM = r"(?:rs\.?|pkr|rupees?)?\s*([\d,]+(?:\.\d+)?)\s*(k|thousand|lac|lakh)?\s*(?:rs\.?|pkr|rupees?)?\s*/?-?"
 
 _PRICE_PATTERNS = [
-    ("between", re.compile(rf"\bbetween\s+{_NUM}\s+(?:and|to|-)\s+{_NUM}", re.IGNORECASE)),
-    ("under",   re.compile(rf"\b(?:under|below|less than|up ?to|within|not more than|max(?:imum)?(?: of)?)\s+{_NUM}", re.IGNORECASE)),
-    ("over",    re.compile(rf"\b(?:above|over|more than|min(?:imum)?(?: of)?|at least|starting from)\s+{_NUM}", re.IGNORECASE)),
-    ("around",  re.compile(rf"\b(?:around|approx(?:imately)?|about|near)\s+{_NUM}", re.IGNORECASE)),
+    (
+        "between",
+        re.compile(rf"\bbetween\s+{_NUM}\s+(?:and|to|-)\s+{_NUM}", re.IGNORECASE),
+    ),
+    (
+        "under",
+        re.compile(
+            rf"\b(?:under|below|less than|up ?to|within|not more than|max(?:imum)?(?: of)?)\s+{_NUM}",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "over",
+        re.compile(
+            rf"\b(?:above|over|more than|min(?:imum)?(?: of)?|at least|starting from)\s+{_NUM}",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "around",
+        re.compile(
+            rf"\b(?:around|approx(?:imately)?|about|near)\s+{_NUM}", re.IGNORECASE
+        ),
+    ),
 ]
 
 
@@ -110,7 +130,7 @@ def extract_price_filter(user_msg: str):
             val = _parse_num(m.group(1), m.group(2))
             price_filter = {"min": val * 0.8, "max": val * 1.2}
 
-        cleaned = user_msg[:m.start()] + " " + user_msg[m.end():]
+        cleaned = user_msg[: m.start()] + " " + user_msg[m.end() :]
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.")
         print(f"[extract_price_filter] {price_filter} from {user_msg!r} -> {cleaned!r}")
         # NOTE: when the price phrase was the ENTIRE message (e.g. "under
@@ -171,12 +191,19 @@ _LIST_RULES = """
   3. Use plain, common product names that a store would actually stock. No brands unless the customer named one.
   4. Food names that also match non-food items MUST carry a food qualifier: "Dairy Butter" (never "Butter") or "Chicken meat" (never "Chicken").
   5. For gifts, never use the word "gift".
+  6. ALWAYS English product names, whatever language the customer writes in (the catalog is English only).
+     Translate the meaning, never transliterate: "chashmay" -> "Sunglasses", "chawal" -> "Basmati Rice",
+     "doodh" -> "Milk", "khilone" -> specific toys. Drop filler words ("dikhao", "chahiye", "la do", "ka saman", "wagera").
 
   Examples:
   - "suggest me some gym products" / "gym related products" / "gym" -> ["Whey Protein", "Weight Lifting Belt", "Workout Gloves", "Yoga Mat", "Resistance Bands", "Shaker Bottle", "Sports Towel", "Duffel Bag"]
   - "baby products"                 -> ["Diapers", "Baby Wipes", "Feeding Bottle", "Baby Lotion", "Baby Shampoo", "Baby Cereal", "Pacifier", "Baby Powder"]
   - "kitchen items"                 -> ["Non Stick Pan", "Pressure Cooker", "Knife Set", "Cutting Board", "Storage Containers", "Spatula", "Dinner Set"]
+  - "Vegetables" / "Different Vegetables" -> ["Tomato Red", "Jalapeno Chilli", "Peas (Mutter)", "Carrot (Gajar)", "Lemon (Leemun)", "Onion (Pyaaz)", "Garlic (lehsan)", "Ginger (Adrak)"]
   - "camping"                       -> ["Tent", "Sleeping Bag", "Torch", "Water Bottle", "Portable Stove", "Insect Repellent", "Cooler Box"]
+  - "different pulses" / "pulses"   -> ["Daal Channa", "Daal Mong","Daal Mash", "Daal Masoor", "Daal Kala Masoor", "Daal Arhar", "Daal Mong Chilka"]
+  - "beef biryani ka saman la do"   -> ["Beef Meat", "Basmati Rice", "Yogurt", "Onion (Pyaaz)", "Tomato (Tamatar)", "Biryani Masala", "Ginger Garlic Paste", "Green Chilli"]
+  - "bachi ke liye water gun, color, chashmay" -> ["Water Gun Toy", "Color Pencils", "Crayons", "Kids Sunglasses"]
   - "Chicken Biryani Ingredients"   -> ["Chicken meat", "Basmati Rice", "Yogurt", "Onion (Pyaaz)", "Tomato (Tamatar)", "Ginger Powder", "Garlic (Lehsan)", "Green Chilli", "Coriander (Dhania) leaves"]
   - "breakfast"                     -> ["Paratha", "Farm Eggs", "Bread", "Dairy Butter", "Honey", "Jam", "Oatmeal", "Tea", "Juice"]
   - "dairy products"                -> ['Milk', 'Yogurt','Farm Eggs', 'Butter', 'Shredded Cheese', 'Cream', 'Paneer', 'Desi Ghee']
@@ -184,7 +211,8 @@ _LIST_RULES = """
   - "something for my wife"         -> ["Perfume", "Handbag", "Jewelry Set", "Makeup Kit", "Skincare Set", "Watch"]
 """
 
-_SYSTEM_PROMPT = """
+_SYSTEM_PROMPT = (
+    """
 You are a shopping-query understanding engine for a Pakistani retail store.
 For every customer message return ONLY this JSON (no extra text):
 {"off_topic": true|false, "is_followup": true|false, "kind": "product"|"list"|"followup", "query": "...", "items": ["...", ...]}
@@ -212,16 +240,21 @@ First strip filler words ("suggest me", "show me", "i want", "i need", "can you"
 When unsure, choose "list".
 
 ## query  (kind "product" / "followup", or off_topic=true)
-Return the original message UNCHANGED. Do not infer, rewrite, or complete it.
+English message: return it UNCHANGED. Do not infer, rewrite, or complete it.
+Any other language (Roman Urdu, Urdu, ...): return its English translation as a product search phrase
+("mujhe basmati chawal chahiye" -> "Basmati Rice"), since the catalog is English only.
 Sunglasses exception: "sunglasses"/"men's sunglasses" etc. -> "[Men's/Women's] [Brand] [Frame Color] [Lens Color] Lens Sunglasses"
 (include parts only if stated; default lens Black/Brown when gender is given).
 
 ## items  (kind "list" only; otherwise [])
 SPECIFIC product names to search for, one per array entry.
-""" + _LIST_RULES + """
+"""
+    + _LIST_RULES
+    + """
 ## CRITICAL
 NEVER output a category label or rule name ("Gym Products", "Generic list request", "Gift Request") in query or items.
 """
+)
 
 # Used only when the message is clearly broad but analyze_query's main call
 # still didn't produce a list (see _BROAD_REQUEST_PATTERN).
@@ -247,21 +280,26 @@ MIN_LIST_ITEMS = 3
 # says. Seen alone (with no chat history) the LLM tends to misread these —
 # "for women" as a gift list, "in white" as a list of white products, "yes"
 # as off-topic — which would drop the previous topic from the next search.
-_COLORS = (r"black|white|red|blue|green|yellow|pink|purple|orange|brown|grey|gray|"
-           r"silver|golden|gold|beige|maroon|navy|cream|multicolou?r")
-_FOLLOWUP_PATTERNS = [re.compile(p) for p in (
-    # audience: "for men's", "only for women", "kids ones"
-    r"(?:only |just )?(?:for )?(?:the )?(?:men'?s?|women'?s?|ladies|gents|male|female|boys?|girls?|kids?|children|babies|him|her)(?: ones?| only)?",
-    # colour: "in white", "black ones", "red colour"
-    rf"(?:in |only |any )?(?:{_COLORS})(?: colou?r| ones?| only)?",
-    # size: "only large", "xl size"
-    r"(?:in |only |any )?(?:small|medium|large|x{0,3}l|x?s|m|big|bigger|smaller)(?: size| ones?| only)?",
-    # continuation / confirmation
-    r"(?:yes|yeah|yup|yep|sure|ok(?:ay)? show|no|nope|nah|more|show more|show me more|more options|other options|"
-    r"something else|any other|anything else|next|another one|others?)",
-    # reference to a shown item
-    r"(?:the )?(?:first|second|third|fourth|last|1st|2nd|3rd|4th) one",
-)]
+_COLORS = (
+    r"black|white|red|blue|green|yellow|pink|purple|orange|brown|grey|gray|"
+    r"silver|golden|gold|beige|maroon|navy|cream|multicolou?r"
+)
+_FOLLOWUP_PATTERNS = [
+    re.compile(p)
+    for p in (
+        # audience: "for men's", "only for women", "kids ones"
+        r"(?:only |just )?(?:for )?(?:the )?(?:men'?s?|women'?s?|ladies|gents|male|female|boys?|girls?|kids?|children|babies|him|her)(?: ones?| only)?",
+        # colour: "in white", "black ones", "red colour"
+        rf"(?:in |only |any )?(?:{_COLORS})(?: colou?r| ones?| only)?",
+        # size: "only large", "xl size"
+        r"(?:in |only |any )?(?:small|medium|large|x{0,3}l|x?s|m|big|bigger|smaller)(?: size| ones?| only)?",
+        # continuation / confirmation
+        r"(?:yes|yeah|yup|yep|sure|ok(?:ay)? show|no|nope|nah|more|show more|show me more|more options|other options|"
+        r"something else|any other|anything else|next|another one|others?)",
+        # reference to a shown item
+        r"(?:the )?(?:first|second|third|fourth|last|1st|2nd|3rd|4th) one",
+    )
+]
 
 
 def is_followup_fragment(user_msg: str) -> bool:
@@ -279,6 +317,7 @@ ITEM_SYNONYMS = {
     "egg": "Farm Eggs",
     "eggs": "Farm Eggs",
     "cheese": "Shredded Cheese",
+    "pulses": "Naheed Daal",
 }
 
 
@@ -374,7 +413,9 @@ def analyze_query(user_msg: str):
         if len(items) >= MIN_LIST_ITEMS:
             query = ", ".join(items)
 
-    print(f"[analyze_query] off_topic={off_topic} kind={kind!r} query={query!r} is_followup={is_followup}")
+    print(
+        f"[analyze_query] off_topic={off_topic} kind={kind!r} query={query!r} is_followup={is_followup}"
+    )
     return off_topic, query, is_followup
 
 

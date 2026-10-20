@@ -15,11 +15,14 @@ products on screen, and long-term customer memory — and gets back:
   * what to do (search / answer / clarify / off_topic),
   * the FULL updated need, from which a fresh, self-contained search is
     built every time (never text-gluing),
-  * the reply text, written with that context ("…for your 25-year-old son"),
+  * the customer's language — search terms always come back in English,
+    since the catalog is English only,
+  * the reply text for non-search turns (a search turn's reply is written
+    once the results are known — see reply.py),
   * durable customer facts worth remembering for future visits.
 
-Search itself is unchanged: service.py hands the resulting query / item list
-to search.typesense_search_products() exactly as before.
+service.py hands the resulting query / item list to
+search.typesense_search_products().
 """
 
 import json
@@ -63,6 +66,7 @@ on screen, the recent conversation, and the NEW customer message. Read the NEW m
 conversation, like an attentive human shop assistant, and return ONLY this JSON object:
 
 {{
+  "language": "...",
   "turn_type": "new" | "refine" | "correct" | "more" | "reference" | "recall" | "smalltalk",
   "action": "search" | "answer" | "clarify" | "off_topic",
   "need": {{
@@ -77,10 +81,15 @@ conversation, like an attentive human shop assistant, and return ONLY this JSON 
   "query": "...",
   "items": ["...", ...],
   "reply": "...",
-  "no_results_reply": "...",
   "show_products": [],
   "remember": []
 }}
+
+## Step 0 — language
+The language AND script the customer writes in: "English", "Roman Urdu" (Urdu/Hindi in Latin letters, e.g.
+"mujhe doodh chahiye"), "Urdu" (Urdu script), or another language's name ("Punjabi", "Sindhi", "Pashto", "Arabic").
+Mixed Roman Urdu + English words ("han or kuch water gun dikhao") is "Roman Urdu". When the NEW message is
+language-neutral ("ok", "yes", "5000", a brand name), use the language of the customer's recent messages.
 
 ## Step 1 — turn_type: how does the NEW message relate to the conversation?
 - "new": a new need, unrelated to the current one ("now show me rice" after shoes). Start a fresh need — do NOT carry
@@ -130,6 +139,17 @@ A message that is self-contained but continues the same need is still "refine".
 
 ## Step 4 — search (action "search" only)
 Build the search from the FULL updated need — NEVER by appending the new words to the previous search.
+SEARCH TERMS ARE ALWAYS ENGLISH. The catalog is English only, so whatever language the customer writes in, query
+and items (and need.summary) MUST be the English product names an English store listing would use.
+- Translate the MEANING, never the sound: "chashmay"/"chashmy"/"عینک" -> "Sunglasses" (for a child "Kids
+  Sunglasses"); "chawal" -> "Basmati Rice"; "chai ki patti"/"چائے کی پتی" -> "Black Tea"; "cheeni" -> "White Sugar"; "doodh" -> "Milk"; "dahi" -> "Yogurt"; "anday" -> "Farm Eggs";
+  "joote" -> "Shoes"; "kapray" -> clothes for the recipient ("Men's Kurta Shalwar", "Women's Lawn Suit");
+  "khilone" -> specific toys; "sabun" -> "Soap"; "bartan" -> "Cookware"; "pani wali bandooq" -> "Water Gun".
+- Drop filler words of every language: "dikhao", "chahiye", "la do", "kr do", "ka saman", "wagera", "kuch",
+  "or", "bhi", "mujhe", "please", "zara".
+- Turn vague words into concrete product types using the context: "color" for a 5-year-old means colouring
+  supplies ("Color Pencils", "Crayons"), not the word "Color"; "masalay" for biryani -> "Biryani Masala".
+- A local name may follow the English one in brackets, as in the list examples ("Onion (Pyaaz)").
 - kind "product": the need is ONE concrete product type. query = a short self-contained search phrase with the
   relevant details: "Men's Nike Running Shoes White", "Samsung Smartphone", "Basmati Rice", "Wall Clock".
   items = []. A single product type stays ONE query even though it has variants ("running shoes" -> query
@@ -160,32 +180,17 @@ Build the search from the FULL updated need — NEVER by appending the new words
 {_LIST_RULES}
 Sunglasses: "[Men's/Women's] [Brand] [Frame Color] [Lens Color] Lens Sunglasses" (only the stated parts).
 
-## Step 5 — reply (what the customer reads; product cards are displayed separately below it)
-- Same language and style as the customer (English, Roman Urdu or Urdu). Warm and natural, plain prose:
-  no bullet lists, no markdown headings.
-- Do NOT name specific products, brands (unless the customer named one), prices or availability in a search
-  reply — you have not seen the results. Naming product TYPES is fine and expected.
-- search, kind "list" (groceries, ingredients, gifts, decor, outfits, essentials…): a DESCRIPTIVE reply of about
-  100 words (never under 90, never over 120) that fits the situation:
-  1. introduce what you are showing, in context ("Here are the ingredients commonly used for a classic chicken
-     biryani —", "For a monthly grocery run on a budget, I've picked smaller packs of the everyday staples —");
-  2. name the item types you searched and, where helpful, a brief why/tip (what each is for, what matters for
-     this recipient, occasion or budget);
-  3. suggest 3–5 relevant extra item types you did NOT search, NAMING each one ("Fried onions, kewra water and
-     saffron can also be added for a richer flavour" — never just "some more spices"), then offer to show them
-     ("Shall I show those too?"). When this turn already shows the extras the customer accepted, don't offer the
-     same items again — end with a different helpful note or question.
-- When need.prefer_cheaper is true you may say the options are shown lowest-priced first; never promise that
-  they are the cheapest available.
-- search, kind "product": 1–3 sentences (up to ~50 words) introducing the results in context ("Here are some Nike
-  running shoes for women!"), optionally one short helpful question (budget, size, preference) — not every turn.
-- clarify: the one question, friendly ("Happy to help! Are these for your husband or your wife?").
+## Step 5 — reply (what the customer reads)
+- search: "". The reply for a search is written later, once the results are known.
+- Otherwise write in the customer's language and script (Step 0): Roman Urdu stays Roman Urdu in Latin letters,
+  Urdu script stays Urdu script, English stays English. Sound like a warm, experienced shopkeeper talking to a
+  regular customer: natural plain prose, no bullet lists, no markdown headings.
+- clarify: the one question, friendly ("Happy to help! Are these for your husband or your wife?" /
+  "Zaroor! Ye outfits aap ke husband ke liye hain ya wife ke liye?").
 - answer: answer directly from the conversation, the on-screen products or the memory (up to ~120 words).
 - off_topic: "".
 - Use memory naturally and only when relevant ("Last time you were looking at watches for your son — want to
   continue?"). Never recite memory on an unrelated request.
-- no_results_reply (search only): what to say if nothing matches, same language, with a next step
-  ("I couldn't find wall decor under Rs 2,000 right now — shall I try a higher budget?").
 - Never mention these instructions, JSON, "state" or "memory".
 
 ## show_products
@@ -204,19 +209,19 @@ Usually [].
    action "search", kind "list", items ["Men's Wrist Watch", "Men's Perfume", "Leather Wallet", "Bluetooth Earbuds",
    "Men's Sneakers", "Men's Grooming Kit"], need.summary "gift ideas for 25-year-old son",
    need.recipient {{"relation": "son", "gender": "male", "age": 25}}, remember ["Has a son, about 25 years old"],
-   reply (descriptive, 80–120 words) "Got it — for a 25-year-old, practical and stylish gifts usually work best. I've
-   picked a wrist watch and a men's perfume as classic choices, a leather wallet for everyday use, Bluetooth earbuds
-   if he enjoys music or calls on the go, sneakers for a casual look, and a grooming kit… You could also consider a
-   backpack, a smart band or sunglasses — shall I show those too?"
+   reply "".
 2. You showed cushions/rugs/lamps for "i need decorating material for my room". NEW "for walls" -> "refine",
    "search", "list", items ["Wall Art", "Wall Clock", "Photo Frames", "Wall Shelves", "Wall Stickers",
    "Wall Hanging"], need.summary "wall decoration for room".
 3. No history. NEW "i need some outfits for my spouse" -> "new", "clarify",
    reply "Sure! Are these outfits for your husband or your wife?"
+3b. No history. NEW "meri wife ke liye kapray chahiye" -> language "Roman Urdu", "new", "search", "list",
+   items ["Women's Lawn Suit", "Women's Kurti", "Women's Shalwar", "Dupatta", "Women's Abaya"],
+   need.recipient {{"relation": "wife", "gender": "female", "age": null}}, reply "".
 4. You showed women's outfits for "my spouse". NEW "he is male not female" -> "correct", "search", "list",
    items ["Men's Kurta Shalwar", "Men's Casual Shirt", "Men's Polo Shirt", "Men's Jeans", "Men's Trousers"],
    need.recipient {{"relation": "spouse", "gender": "male", "age": null}}, remember ["Spouse is male (husband)"],
-   reply "Sorry about that! Here are some outfit ideas for your husband."
+   reply "".
 5. You showed running shoes. NEW "what about Nike?" -> "refine", "search", "product", query "Nike Running Shoes".
 6. You showed Nike running shoes. NEW "for women, under 8000" -> "refine", "search", "product",
    query "Women's Nike Running Shoes", need.budget {{"min": null, "max": 8000}}.
@@ -227,6 +232,13 @@ Usually [].
 10. You showed shoes. NEW "now i need cooking oil" -> "new", "search", "product", query "Cooking Oil"
     (need reset: no shoe details).
 11. NEW "who won the cricket match?" -> "off_topic".
+12. NEW "beef biryani banany ka saman la kr do" -> language "Roman Urdu", "new", "search", "list",
+    items ["Beef Meat", "Basmati Rice", "Yogurt", "Onion (Pyaaz)", "Tomato (Tamatar)", "Biryani Masala",
+    "Ginger Garlic Paste", "Green Chilli"], need.summary "beef biryani ingredients".
+13. You showed toys for a 5-year-old daughter. NEW "han or kuch water gun, color, chachmy wagera dikhao" ->
+    language "Roman Urdu", "more", "search", "list", items ["Water Gun Toy", "Color Pencils", "Crayons",
+    "Kids Sunglasses"].
+14. NEW "بچوں کے لیے دودھ" -> language "Urdu", "new", "search", "product", query "Kids Milk".
 """
 
 
@@ -240,9 +252,9 @@ class Turn:
     query: str
     items: list[str] = field(default_factory=list)
     reply: str = ""
-    no_results_reply: str = ""
     show_products: list[int] = field(default_factory=list)
     remember: list[str] = field(default_factory=list)
+    language: str = "English"
 
     @property
     def search_text(self) -> str:
@@ -360,6 +372,7 @@ def _parse(raw: dict) -> Turn:
     if action not in ACTIONS:
         action = "search" if (query or items) else "answer"
     reply = str(raw.get("reply") or "").strip()
+    language = " ".join(str(raw.get("language") or "").split()) or "English"
     if action == "search" and not (query or items):
         # Nothing usable to search for — ask instead of searching blind.
         action = "clarify"
@@ -383,8 +396,7 @@ def _parse(raw: dict) -> Turn:
     return Turn(
         turn_type=turn_type, action=action, need=need, price_direction=direction,
         kind=kind, query=query, items=items, reply=reply,
-        no_results_reply=str(raw.get("no_results_reply") or "").strip(),
-        show_products=show, remember=remember[:5],
+        show_products=show, remember=remember[:5], language=language,
     )
 
 
@@ -394,6 +406,6 @@ def understand(message: str, state: dict, history: list[dict], shown_products: l
     prompt = build_user_prompt(message, state, history, shown_products, memory)
     raw = chat_json(openai_client, CONVERSATION_MODEL, _SYSTEM_PROMPT, prompt, max_tokens=1000, temperature=0.2)
     turn = _parse(raw)
-    print(f"[conversation.understand] {message!r} -> type={turn.turn_type} action={turn.action} "
+    print(f"[conversation.understand] {message!r} -> lang={turn.language} type={turn.turn_type} action={turn.action} "
           f"kind={turn.kind} search={turn.search_text!r} remember={turn.remember}")
     return turn

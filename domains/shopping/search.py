@@ -15,7 +15,7 @@ query resolves to:
     out into one plain, conversation-free search per item in a single
     multi_search call, since that doesn't map onto Typesense's single-query
     follow-up mechanism. The caller generates its own reply text for this
-    path (see query_engine.build_multi_item_answer).
+    path (see reply.py).
 
 Price constraints ("under 2500") are applied as a Typesense filter_by on the
 plain numeric PRICE_FIELD, never through the embedding — see
@@ -41,12 +41,17 @@ from config.shopping import (
     openai_client,
 )
 
-MULTI_ITEM_THRESHOLD = 1
+MULTI_ITEM_THRESHOLD = 2
 MAX_EXPANSION_ITEMS = 8  # cap sub-searches so we don't blow up multi_search payloads
 TOTAL_HIT_BUDGET = (
     8  # keep overall result size comparable to old single-search behaviour
 )
 MIN_HITS_PER_ITEM = 1
+
+# Key added to every returned hit: the searched items it was found for (one
+# product can match several), so the caller can tell which items came back
+# empty (see reply.py).
+MATCHED_ITEM = "_matched_item"
 
 CATEGORY_MATCHES_PER_ITEM = 3
 # Category-filtered results win unless their best vector_distance is worse
@@ -392,6 +397,8 @@ def typesense_search_products(
         hits = results[0].get("hits", []) if results else []
         if cheapest_first:
             hits = _cheapest_relevant(hits, TOTAL_HIT_BUDGET)
+        for hit in hits:
+            hit[MATCHED_ITEM] = [expanded_query]
 
         conv = data.get("conversation", {})
         conversation_result = {
@@ -422,9 +429,12 @@ def typesense_search_products(
     ]
     if cheapest_first:
         per_item_hits = [_cheapest_relevant(h, per_item) for h in per_item_hits]
+    for item, item_hits in zip(items, per_item_hits):
+        for hit in item_hits:
+            hit[MATCHED_ITEM] = [item]
 
     hits = []
-    seen_ids = set()
+    kept_by_id = {}
     max_len = max((len(h) for h in per_item_hits), default=0)
     for i in range(max_len):
         for item_hits in per_item_hits:
@@ -433,9 +443,14 @@ def typesense_search_products(
             hit = item_hits[i]
             doc_id = hit.get("document", {}).get("id")
             if doc_id is not None:
-                if doc_id in seen_ids:
+                kept = kept_by_id.get(doc_id)
+                if kept is not None:
+                    # Same product found for another item too — remember that.
+                    kept[MATCHED_ITEM] += [
+                        m for m in hit[MATCHED_ITEM] if m not in kept[MATCHED_ITEM]
+                    ]
                     continue
-                seen_ids.add(doc_id)
+                kept_by_id[doc_id] = hit
             hits.append(hit)
 
     return hits, None

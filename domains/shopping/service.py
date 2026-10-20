@@ -12,6 +12,9 @@ customer memory -> one fresh, self-contained search, built from the full
 updated need. If that LLM call fails, the older single-message pipeline
 (query_engine.analyze_query + last_topic) answers instead, so a model outage
 degrades follow-ups rather than breaking search.
+
+A search turn's reply is written AFTER the search (reply.compose), from the
+products actually being displayed, in the customer's own language.
 """
 
 import re
@@ -19,7 +22,7 @@ import uuid
 
 from config.memory import HISTORY_MESSAGES
 from config.shopping import VECTOR_DISTANCE_THRESHOLD
-from domains.shopping import conversation, query_engine, repository, search
+from domains.shopping import conversation, query_engine, reply, repository, search
 from services import memory_service
 
 NO_MATCH_REPLY = (
@@ -32,11 +35,6 @@ _BUDGET_WORDS = re.compile(
     r"\b(cheap(?:er|est)?|affordable|budget|economical|inexpensive|low[\s-]?(?:cost|price[sd]?)|"
     r"less expensive|too expensive|very expensive|sast[aie]|kam\s+qeemat|kam\s+price)\b",
     re.IGNORECASE,
-)
-
-PARTIAL_LIST_NOTE = (
-    "(I couldn't find a close match for everything mentioned above at Naheed.pk right now, "
-    "so I've shown only the items that matched well.)"
 )
 
 # "Already searched" items remembered for one need, so "show more" keeps
@@ -94,7 +92,7 @@ def handle_message(sid: str, user_msg: str, conversation_id: str | None = None, 
         answer = turn.reply or "Could you tell me a bit more about what you're looking for?"
         return _result(answer, products, None, tracking_conv_id)
 
-    return _search_turn(sid, user_msg, turn, state, tracking_conv_id)
+    return _search_turn(sid, user_msg, turn, state, history, tracking_conv_id)
 
 
 def _budget_filter(need: dict) -> dict | None:
@@ -110,7 +108,7 @@ def _budget_filter(need: dict) -> dict | None:
     return {"min": lo, "max": hi} if (lo is not None or hi is not None) else None
 
 
-def _search_turn(sid, user_msg, turn, state, tracking_conv_id) -> dict:
+def _search_turn(sid, user_msg, turn, state, history, tracking_conv_id) -> dict:
     need = dict(turn.need or {})
 
     # An explicit number in THIS message ("under 2500") is parsed exactly by
@@ -145,8 +143,9 @@ def _search_turn(sid, user_msg, turn, state, tracking_conv_id) -> dict:
     need["prefer_cheaper"] = bool(need.get("prefer_cheaper")) or bool(_BUDGET_WORDS.search(user_msg))
 
     search_text = turn.search_text
+    searched_now = turn.items[:search.MAX_EXPANSION_ITEMS] or [turn.query]
     searched = state.get("searched", []) if turn.turn_type == "more" else []
-    searched = (searched + (turn.items[:search.MAX_EXPANSION_ITEMS] or [turn.query]))[-MAX_SEARCHED_ITEMS:]
+    searched = (searched + searched_now)[-MAX_SEARCHED_ITEMS:]
     # Saved before searching, so even a no-results turn keeps the need
     # ("try a higher budget" still knows what we're looking for).
     repository.set_conversation_state(sid, {"need": need, "searched": searched, "last_search": search_text})
@@ -166,11 +165,7 @@ def _search_turn(sid, user_msg, turn, state, tracking_conv_id) -> dict:
     if new_conv_id != tracking_conv_id:
         repository.ensure_cart_session(sid, new_conv_id)
 
-    searched_count = len(hits)
     hits = _within_distance_threshold(hits)
-    # The reply was written before the results existed and names every item
-    # type searched — say so when some of them had no real match.
-    partial_list = turn.kind == "list" and 0 < len(hits) < searched_count
     if hits and turn.turn_type == "more":
         # Prefer products the customer hasn't seen yet; if everything was
         # already shown, showing it again beats showing nothing.
@@ -178,17 +173,27 @@ def _search_turn(sid, user_msg, turn, state, tracking_conv_id) -> dict:
         unseen = [h for h in hits if str(h.get("document", {}).get("id", "")) not in seen]
         hits = unseen or hits
 
-    if not hits:
-        return _result(turn.no_results_reply or NO_MATCH_REPLY, [], None, new_conv_id)
-
-    answer = (
-        turn.reply
-        or (conversation_result or {}).get("answer")
-        or query_engine.build_multi_item_answer(hits)
+    answer, products = _reply_for_results(
+        user_msg, turn.language, need, turn.turn_type, searched_now, hits, history,
     )
-    if partial_list:
-        answer += f"\n\n{PARTIAL_LIST_NOTE}"
-    return _result(answer, _hits_to_products(hits), None, new_conv_id)
+    return _result(answer, products, None, new_conv_id)
+
+
+def _reply_for_results(user_msg, language, need, turn_type, searched, hits, history) -> tuple[str, list]:
+    """The reply, written once we know exactly what will be displayed, plus
+    the products to display (minus any the reply step judged to be the wrong
+    product type). Falls back to a template reply if that LLM call fails."""
+    products = _hits_to_products(hits)
+    matched = [list(h.get(search.MATCHED_ITEM) or []) for h in hits]
+    try:
+        composed = reply.compose(user_msg, language, need, turn_type, searched, products, matched, history)
+    except Exception as e:
+        print(f"[shopping] reply composition failed, using template reply: {e}")
+        return (query_engine.build_multi_item_answer(hits) if hits else NO_MATCH_REPLY), products
+
+    products = [p for i, p in enumerate(products) if i not in composed.drop]
+    answer = composed.reply or (query_engine.build_multi_item_answer(products) if products else NO_MATCH_REPLY)
+    return answer, products
 
 
 def _within_distance_threshold(hits: list) -> list:
@@ -278,24 +283,18 @@ def _handle_single_message(sid, user_msg, client_conv_id, tracking_conv_id) -> d
     except Exception as e:
         return _result(f"Sorry, something went wrong while searching: {e}", [], None, tracking_conv_id)
 
-    if conversation_result is not None:
-        # Single-item path: Typesense generated the reply itself.
-        answer = conversation_result["answer"] or "Here's what I found for you."
-        new_conv_id = conversation_result["conversation_id"] or tracking_conv_id
-    else:
-        # Multi-item path: deterministic reply, no LLM call.
-        answer = query_engine.build_multi_item_answer(hits)
-        new_conv_id = tracking_conv_id
-
+    new_conv_id = (conversation_result or {}).get("conversation_id") or tracking_conv_id
     if new_conv_id != tracking_conv_id:
         repository.ensure_cart_session(sid, new_conv_id)
 
     hits = _within_distance_threshold(hits)
-    if not hits:
-        return _result(NO_MATCH_REPLY, [], None, new_conv_id)
+    if hits:
+        # Remember this turn's resolved (self-contained) search text as the
+        # topic for whatever follow-up fragment comes next.
+        repository.set_last_topic(sid, expanded_search_query)
 
-    # Remember this turn's resolved (self-contained) search text as the topic
-    # for whatever follow-up fragment comes next.
-    repository.set_last_topic(sid, expanded_search_query)
-
-    return _result(answer, _hits_to_products(hits), None, new_conv_id)
+    searched = [i.strip() for i in expanded_search_query.split(",") if i.strip()]
+    need = {"summary": expanded_search_query, "budget": price_filter or {}}
+    # language=None: the reply step reads it off the customer's message.
+    answer, products = _reply_for_results(user_msg, None, need, None, searched, hits, [])
+    return _result(answer, products, None, new_conv_id)

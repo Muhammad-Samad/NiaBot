@@ -10,6 +10,10 @@ load_dotenv()
 # Needs to be good at multi-turn reasoning; gpt-3.5-turbo is not.
 CONVERSATION_MODEL = os.getenv("SHOPPING_CONVERSATION_MODEL", "gpt-4.1-mini")
 
+# Model that writes a search turn's reply once the results are known, in the
+# customer's own language (domains/shopping/reply.py).
+REPLY_MODEL = os.getenv("SHOPPING_REPLY_MODEL") or CONVERSATION_MODEL
+
 # How many recent chat messages (user + assistant, all domains) the
 # conversation model sees on every turn.
 HISTORY_MESSAGES = int(os.getenv("SHOPPING_HISTORY_MESSAGES", "12"))
