@@ -32,7 +32,6 @@ from config.shopping import (
     TYPESENSE_PROTOCOL,
     TYPESENSE_API_KEY,
     PRODUCTS_COLLECTION,
-    CATEGORIES_COLLECTION,
     CONV_MODEL_ID,
     PRICE_FIELD,
     EMBEDDING_MODEL,
@@ -52,14 +51,6 @@ MIN_HITS_PER_ITEM = 1
 # product can match several), so the caller can tell which items came back
 # empty (see reply.py).
 MATCHED_ITEM = "_matched_item"
-
-CATEGORY_MATCHES_PER_ITEM = 3
-# Category-filtered results win unless their best vector_distance is worse
-# than the unfiltered search's best by more than this. Measured on the live
-# catalog: genuine category wins ("Butter" -> dairy, "Wallet") come out
-# closer, while bad category guesses ("Laptop" -> Laptop Bags, "red chili
-# powder" -> face Powders) come out 0.04+ further away.
-CATEGORY_DISTANCE_TOLERANCE = 0.1
 
 # Cheapest-first (budget requests): fetch this many times more candidates
 # than will be shown, keep only the ones about as relevant as the best match
@@ -189,57 +180,6 @@ def _typesense_multi_search(body: dict, params: dict, conversation_id: str | Non
     return payload
 
 
-def match_categories(items: list[str]) -> list[list[str]]:
-    """Keyword-matches each item against CATEGORIES_COLLECTION and returns,
-    per item, up to CATEGORY_MATCHES_PER_ITEM category ids (the values used
-    in products' category_ids). prefix is off so "Tea" can't prefix-match
-    "Team Sports"; plural forms ("Perfume" -> "Perfumes") still match via
-    Typesense's default typo tolerance. Fails open to "no categories" on any
-    error — the category step only refines results, it must never break
-    search."""
-    body = {
-        "searches": [
-            {
-                "collection": CATEGORIES_COLLECTION,
-                "q": item,
-                "query_by": "category_name,path",
-                "query_by_weights": "3,1",
-                "prefix": "false",
-                "filter_by": "status:=1 && product_count:>0",
-                "include_fields": "id",
-                "per_page": CATEGORY_MATCHES_PER_ITEM * 2,
-            }
-            for item in items
-        ]
-    }
-    try:
-        results = _typesense_multi_search(body, {}, None).get("results", [])
-    except RuntimeError as e:
-        print("-----category lookup failed, searching without categories: ", e)
-        return [[] for _ in items]
-
-    matches = []
-    for r in results:
-        hits = r.get("hits", [])
-        if hits:
-            # Keep only the categories matching as many query tokens as the
-            # best one (e.g. "Dairy Butter" -> Dairy/Butter & Margarine, not
-            # every category that merely contains "Dairy").
-            best = max(h["text_match_info"]["tokens_matched"] for h in hits)
-            hits = [h for h in hits if h["text_match_info"]["tokens_matched"] == best]
-        matches.append([h["document"]["id"] for h in hits[:CATEGORY_MATCHES_PER_ITEM]])
-    return matches
-
-
-def _join_filters(*clauses: str | None) -> str | None:
-    clauses = [c for c in clauses if c]
-    return " && ".join(f"({c})" for c in clauses) if clauses else None
-
-
-def _category_filter(category_ids: list[str]) -> str | None:
-    return f"category_ids:[{','.join(category_ids)}]" if category_ids else None
-
-
 def _product_search(vector: list[float], k: int, filter_by: str | None) -> dict:
     # q="*" + our own vector = pure vector search. Passing item text as q
     # makes Typesense auto-embed it server-side when query_by includes the
@@ -257,55 +197,6 @@ def _product_search(vector: list[float], k: int, filter_by: str | None) -> dict:
     if filter_by:
         search["filter_by"] = filter_by
     return search
-
-
-def _top_distance(result: dict | None) -> float:
-    hits = (result or {}).get("hits") or []
-    return hits[0].get("vector_distance", float("inf")) if hits else float("inf")
-
-
-def _category_wins(unfiltered: dict, filtered: dict | None) -> bool:
-    """True when the category-filtered results are at least about as close
-    a match as the unfiltered ones — see CATEGORY_DISTANCE_TOLERANCE."""
-    if filtered is None or not filtered.get("hits"):
-        return False
-    return (
-        _top_distance(filtered)
-        <= _top_distance(unfiltered) + CATEGORY_DISTANCE_TOLERANCE
-    )
-
-
-def _run_with_and_without_categories(items, vectors, category_ids, k, filter_by):
-    """For each item runs the plain vector search and, when the item matched
-    any categories, the same search restricted to them — all in a single
-    multi_search. Returns per item (hits, used_category: bool)."""
-    searches, has_cats = [], []
-    for vector, cats in zip(vectors, category_ids):
-        searches.append(_product_search(vector, k, filter_by))
-        if cats:
-            searches.append(
-                _product_search(
-                    vector, k, _join_filters(filter_by, _category_filter(cats))
-                )
-            )
-        has_cats.append(bool(cats))
-
-    results = _typesense_multi_search({"searches": searches}, {}, None).get(
-        "results", []
-    )
-
-    out, i = [], 0
-    for item, cats in zip(items, has_cats):
-        unfiltered = results[i]
-        filtered = results[i + 1] if cats else None
-        i += 2 if cats else 1
-        use_cat = _category_wins(unfiltered, filtered)
-        print(
-            f"-----item {item!r}: category filter {'USED' if use_cat else 'skipped'} "
-            f"(all={_top_distance(unfiltered):.3f}, cat={_top_distance(filtered):.3f})"
-        )
-        out.append(((filtered if use_cat else unfiltered).get("hits", []), use_cat))
-    return out
 
 
 def _price_of(hit) -> float:
@@ -336,11 +227,6 @@ def typesense_search_products(
     """Product retrieval, given an already-expanded/classified query (see
     query_engine.analyze_query).
 
-    Each item is first matched against CATEGORIES_COLLECTION; the product
-    search is then restricted to those categories when that gives results at
-    least as close as an unrestricted search (see _category_wins), so e.g.
-    "Butter" stays in Dairy instead of returning body butter lotions.
-
     cheapest_first (budget requests) returns, per item, the cheapest of the
     closely relevant matches instead of the closest ones — see
     _cheapest_relevant().
@@ -370,25 +256,13 @@ def typesense_search_products(
             params["conversation_id"] = conversation_id
 
         vector = embed_query_text(expanded_query)
-        search_filter = filter_by
-        # Only fresh searches get a category: a follow-up's text ("for men's",
-        # "show more") is a fragment Typesense rewrites from the conversation
-        # history, so matching categories against it would be meaningless.
-        if not conversation_id:
-            cats = match_categories([expanded_query])[0]
-            if cats:
-                ((_, use_cat),) = _run_with_and_without_categories(
-                    [expanded_query], [vector], [cats], TOTAL_HIT_BUDGET, filter_by
-                )
-                if use_cat:
-                    search_filter = _join_filters(filter_by, _category_filter(cats))
 
         k = (
             TOTAL_HIT_BUDGET * CHEAPEST_CANDIDATE_MULTIPLIER
             if cheapest_first
             else TOTAL_HIT_BUDGET
         )
-        search = _product_search(vector, k, search_filter)
+        search = _product_search(vector, k, filter_by)
         # With conversation=true Typesense only accepts q as a URL param
         # (set in params above), never inside the search body.
         search.pop("q")
@@ -415,18 +289,15 @@ def typesense_search_products(
     )
 
     vectors = embed_query_texts(items)
-    category_ids = match_categories(items)
     fetch_k = (
         max(per_item * CHEAPEST_CANDIDATE_MULTIPLIER, CHEAPEST_MIN_CANDIDATES)
         if cheapest_first
         else per_item
     )
-    per_item_hits = [
-        h
-        for h, _ in _run_with_and_without_categories(
-            items, vectors, category_ids, fetch_k, filter_by
-        )
-    ]
+    results = _typesense_multi_search(
+        {"searches": [_product_search(v, fetch_k, filter_by) for v in vectors]}, {}, None
+    ).get("results", [])
+    per_item_hits = [r.get("hits", []) for r in results]
     if cheapest_first:
         per_item_hits = [_cheapest_relevant(h, per_item) for h in per_item_hits]
     for item, item_hits in zip(items, per_item_hits):

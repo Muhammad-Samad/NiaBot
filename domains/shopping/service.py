@@ -153,7 +153,7 @@ def _search_turn(sid, user_msg, turn, state, history, tracking_conv_id) -> dict:
 
     try:
         # Never pass a conversation_id: search_text is already
-        # self-contained, and a fresh search gets category matching.
+        # self-contained.
         hits, conversation_result = search.typesense_search_products(
             search_text, conversation_id=None, price_filter=price_filter,
             cheapest_first=need["prefer_cheaper"],

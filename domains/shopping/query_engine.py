@@ -264,10 +264,9 @@ Return ONLY this JSON (no extra text): {"items": ["...", ...]}
 """ + _LIST_RULES
 
 # Words that make a message a broad, multi-product request no matter how the
-# LLM classified it. A single-item search for "gym products" lets the
-# category matcher lock onto one category (e.g. Gym Bags) and every result
-# comes back as that one product type, so these messages are always forced
-# into the multi-item list path.
+# LLM classified it. A single-item search for "gym products" tends to
+# return just one product type (e.g. Gym Bags), so these messages are always
+# forced into the multi-item list path.
 _BROAD_REQUEST_PATTERN = re.compile(
     r"\b(products?|items?|related|things|stuff|essentials|accessories|supplies|"
     r"needs|gear|equipment|collection|range|ideas)\b",
