@@ -30,6 +30,7 @@ from domains.operations.routes import attachments_bp, operations_bp
 from domains.policy import service as policy_service
 from domains.policy.routes import policy_bp
 from router import domain_router
+from services import memory_service
 
 app = Flask(__name__)
 app.secret_key = base_config.FLASK_SECRET_KEY
@@ -66,14 +67,19 @@ def chat():
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
 
-    # Fallback id for cart/session + history bookkeeping when neither the
-    # client nor the domain that ends up handling this message produces a
-    # real conversation id (e.g. the very first message of a session is an
-    # operations query like "track order 123456").
+    """ Fallback id for cart/session + history bookkeeping when neither the
+     client nor the domain that ends up handling this message produces a
+     real conversation id (e.g. the very first message of a session is an
+     operations query like "track order 123456")."""
     fallback_conv_id = client_conv_id or str(uuid.uuid4())
     shopping_repository.ensure_cart_session(sid, fallback_conv_id)
 
-    result = domain_router.route_message(sid, user_msg, client_conv_id)
+    # Long-term memory identity: a signed logged-in customer id from the host
+    # site, else the browser's device id (survives "New Chat").
+    customer_key = memory_service.resolve_customer_key(data.get("device_id"), data.get("customer_token"))
+    memory_service.link_session(sid, customer_key)
+
+    result = domain_router.route_message(sid, user_msg, client_conv_id, customer_key=customer_key)
     conversation_id = result.get("conversation_id") or fallback_conv_id
 
     domain = result.get("domain")
@@ -90,6 +96,28 @@ def chat():
         "products":        result.get("products") or [],
         "cart_action":     result.get("cart_action"),
     })
+
+
+@app.route("/api/welcome", methods=["POST"])
+def welcome():
+    """Called by the chat UI when it opens a session with no history: a
+    "welcome back" line (and a one-tap prompt to continue) for a returning
+    customer, else nothing."""
+    data = request.get_json(force=True)
+    sid = data.get("sid")
+    customer_key = memory_service.resolve_customer_key(data.get("device_id"), data.get("customer_token"))
+    if not sid or not customer_key:
+        return jsonify({})
+    shopping_repository.ensure_cart_session(sid)
+    memory_service.link_session(sid, customer_key)
+    return jsonify(memory_service.welcome(customer_key) or {})
+
+
+@app.route("/api/memory/forget", methods=["POST"])
+def forget_memory():
+    data = request.get_json(force=True)
+    customer_key = memory_service.resolve_customer_key(data.get("device_id"), data.get("customer_token"))
+    return jsonify({"forgotten": memory_service.forget(customer_key)})
 
 
 if __name__ == "__main__":

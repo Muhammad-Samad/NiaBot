@@ -27,23 +27,45 @@ from urllib.parse import urlencode
 import requests
 
 from config.shopping import (
-    TYPESENSE_HOST, TYPESENSE_PORT, TYPESENSE_PROTOCOL, TYPESENSE_API_KEY,
-    PRODUCTS_COLLECTION, CATEGORIES_COLLECTION, CONV_MODEL_ID, PRICE_FIELD,
-    EMBEDDING_MODEL, EMBEDDING_FIELDS, openai_client,
+    TYPESENSE_HOST,
+    TYPESENSE_PORT,
+    TYPESENSE_PROTOCOL,
+    TYPESENSE_API_KEY,
+    PRODUCTS_COLLECTION,
+    CATEGORIES_COLLECTION,
+    CONV_MODEL_ID,
+    PRICE_FIELD,
+    EMBEDDING_MODEL,
+    EMBEDDING_FIELDS,
+    VECTOR_DISTANCE_THRESHOLD,
+    openai_client,
 )
 
-MULTI_ITEM_THRESHOLD = 2
-MAX_EXPANSION_ITEMS  = 10   # cap sub-searches so we don't blow up multi_search payloads
-TOTAL_HIT_BUDGET     = 10   # keep overall result size comparable to old single-search behaviour
-MIN_HITS_PER_ITEM    = 1
+MULTI_ITEM_THRESHOLD = 1
+MAX_EXPANSION_ITEMS = 8  # cap sub-searches so we don't blow up multi_search payloads
+TOTAL_HIT_BUDGET = (
+    8  # keep overall result size comparable to old single-search behaviour
+)
+MIN_HITS_PER_ITEM = 1
 
-CATEGORY_MATCHES_PER_ITEM   = 3
+CATEGORY_MATCHES_PER_ITEM = 3
 # Category-filtered results win unless their best vector_distance is worse
 # than the unfiltered search's best by more than this. Measured on the live
 # catalog: genuine category wins ("Butter" -> dairy, "Wallet") come out
 # closer, while bad category guesses ("Laptop" -> Laptop Bags, "red chili
 # powder" -> face Powders) come out 0.04+ further away.
-CATEGORY_DISTANCE_TOLERANCE = 0.02
+CATEGORY_DISTANCE_TOLERANCE = 0.1
+
+# Cheapest-first (budget requests): fetch this many times more candidates
+# than will be shown, keep only the ones about as relevant as the best match
+# — within VECTOR_DISTANCE_THRESHOLD and within CHEAPEST_RELEVANCE_MARGIN of
+# the item's best distance, so a cheap but loosely related product ("Cooking
+# Oil" -> oil spray can) can't win on price alone — then sort by price.
+CHEAPEST_CANDIDATE_MULTIPLIER = 4
+CHEAPEST_MIN_CANDIDATES = (
+    12  # a long list gets 1 hit/item — still compare a real price range
+)
+CHEAPEST_RELEVANCE_MARGIN = 0.06
 
 
 def embed_query_text(text: str) -> list[float]:
@@ -96,7 +118,7 @@ def _typesense_multi_search(body: dict, params: dict, conversation_id: str | Non
     base_url = f"{TYPESENSE_PROTOCOL}://{TYPESENSE_HOST}:{TYPESENSE_PORT}/multi_search"
     url = f"{base_url}?{urlencode(params)}"
     headers = {
-        "Content-Type":        "application/json",
+        "Content-Type": "application/json",
         "X-TYPESENSE-API-KEY": TYPESENSE_API_KEY,
     }
 
@@ -112,8 +134,13 @@ def _typesense_multi_search(body: dict, params: dict, conversation_id: str | Non
             url = f"{base_url}?{urlencode(params)}"
             try:
                 resp = requests.post(url, headers=headers, json=body, timeout=30)
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e2:
-                raise RuntimeError(f"Typesense request timed out. Please try again. ({e2})")
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+            ) as e2:
+                raise RuntimeError(
+                    f"Typesense request timed out. Please try again. ({e2})"
+                )
         else:
             raise RuntimeError("Typesense request timed out. Please try again.")
     except requests.exceptions.ConnectionError as e:
@@ -125,7 +152,12 @@ def _typesense_multi_search(body: dict, params: dict, conversation_id: str | Non
             f"Typesense host is up and reachable. ({e})"
         )
 
-    if not resp.ok and resp.status_code == 400 and conversation_id and "conversation_id" in resp.text.lower():
+    if (
+        not resp.ok
+        and resp.status_code == 400
+        and conversation_id
+        and "conversation_id" in resp.text.lower()
+    ):
         # The client handed back a conversation_id Typesense no longer
         # recognizes (expired TTL, or the conversation model was deleted and
         # recreated since). Typesense rejects this outright rather than
@@ -160,16 +192,21 @@ def match_categories(items: list[str]) -> list[list[str]]:
     Typesense's default typo tolerance. Fails open to "no categories" on any
     error — the category step only refines results, it must never break
     search."""
-    body = {"searches": [{
-        "collection":       CATEGORIES_COLLECTION,
-        "q":                item,
-        "query_by":         "category_name,path",
-        "query_by_weights": "3,1",
-        "prefix":           "false",
-        "filter_by":        "status:=1 && product_count:>0",
-        "include_fields":   "id",
-        "per_page":         CATEGORY_MATCHES_PER_ITEM * 2,
-    } for item in items]}
+    body = {
+        "searches": [
+            {
+                "collection": CATEGORIES_COLLECTION,
+                "q": item,
+                "query_by": "category_name,path",
+                "query_by_weights": "3,1",
+                "prefix": "false",
+                "filter_by": "status:=1 && product_count:>0",
+                "include_fields": "id",
+                "per_page": CATEGORY_MATCHES_PER_ITEM * 2,
+            }
+            for item in items
+        ]
+    }
     try:
         results = _typesense_multi_search(body, {}, None).get("results", [])
     except RuntimeError as e:
@@ -204,13 +241,13 @@ def _product_search(vector: list[float], k: int, filter_by: str | None) -> dict:
     # "embedding" field — one remote embed call per sub-search, which times
     # out ("Request timed out", 500).
     search = {
-        "collection":     PRODUCTS_COLLECTION,
-        "q":              "*",
-        "query_by":       EMBEDDING_FIELDS,
-        "vector_query":   _vector_query_clause(vector, k),
+        "collection": PRODUCTS_COLLECTION,
+        "q": "*",
+        "query_by": EMBEDDING_FIELDS,
+        "vector_query": _vector_query_clause(vector, k),
         "exclude_fields": "embedding",
-        "per_page":       k,
-        "prefix":         "false",
+        "per_page": k,
+        "prefix": "false",
     }
     if filter_by:
         search["filter_by"] = filter_by
@@ -227,7 +264,10 @@ def _category_wins(unfiltered: dict, filtered: dict | None) -> bool:
     a match as the unfiltered ones — see CATEGORY_DISTANCE_TOLERANCE."""
     if filtered is None or not filtered.get("hits"):
         return False
-    return _top_distance(filtered) <= _top_distance(unfiltered) + CATEGORY_DISTANCE_TOLERANCE
+    return (
+        _top_distance(filtered)
+        <= _top_distance(unfiltered) + CATEGORY_DISTANCE_TOLERANCE
+    )
 
 
 def _run_with_and_without_categories(items, vectors, category_ids, k, filter_by):
@@ -238,10 +278,16 @@ def _run_with_and_without_categories(items, vectors, category_ids, k, filter_by)
     for vector, cats in zip(vectors, category_ids):
         searches.append(_product_search(vector, k, filter_by))
         if cats:
-            searches.append(_product_search(vector, k, _join_filters(filter_by, _category_filter(cats))))
+            searches.append(
+                _product_search(
+                    vector, k, _join_filters(filter_by, _category_filter(cats))
+                )
+            )
         has_cats.append(bool(cats))
 
-    results = _typesense_multi_search({"searches": searches}, {}, None).get("results", [])
+    results = _typesense_multi_search({"searches": searches}, {}, None).get(
+        "results", []
+    )
 
     out, i = [], 0
     for item, cats in zip(items, has_cats):
@@ -249,13 +295,39 @@ def _run_with_and_without_categories(items, vectors, category_ids, k, filter_by)
         filtered = results[i + 1] if cats else None
         i += 2 if cats else 1
         use_cat = _category_wins(unfiltered, filtered)
-        print(f"-----item {item!r}: category filter {'USED' if use_cat else 'skipped'} "
-              f"(all={_top_distance(unfiltered):.3f}, cat={_top_distance(filtered):.3f})")
+        print(
+            f"-----item {item!r}: category filter {'USED' if use_cat else 'skipped'} "
+            f"(all={_top_distance(unfiltered):.3f}, cat={_top_distance(filtered):.3f})"
+        )
         out.append(((filtered if use_cat else unfiltered).get("hits", []), use_cat))
     return out
 
 
-def typesense_search_products(expanded_query: str, conversation_id: str | None = None, price_filter: dict | None = None):
+def _price_of(hit) -> float:
+    try:
+        return float(hit.get("document", {}).get(PRICE_FIELD) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cheapest_relevant(hits: list, n: int) -> list:
+    """The n cheapest of the hits that are about as relevant as the best one
+    (see CHEAPEST_RELEVANCE_MARGIN). Price-0 products (missing catalog
+    price) go last, so they don't crowd out real cheap options."""
+    if not hits:
+        return hits
+    best = min(h.get("vector_distance", float("inf")) for h in hits)
+    cutoff = min(VECTOR_DISTANCE_THRESHOLD, best + CHEAPEST_RELEVANCE_MARGIN)
+    relevant = [h for h in hits if h.get("vector_distance", 0) <= cutoff] or hits[:n]
+    return sorted(relevant, key=lambda h: (_price_of(h) <= 0, _price_of(h)))[:n]
+
+
+def typesense_search_products(
+    expanded_query: str,
+    conversation_id: str | None = None,
+    price_filter: dict | None = None,
+    cheapest_first: bool = False,
+):
     """Product retrieval, given an already-expanded/classified query (see
     query_engine.analyze_query).
 
@@ -264,10 +336,18 @@ def typesense_search_products(expanded_query: str, conversation_id: str | None =
     least as close as an unrestricted search (see _category_wins), so e.g.
     "Butter" stays in Dairy instead of returning body butter lotions.
 
+    cheapest_first (budget requests) returns, per item, the cheapest of the
+    closely relevant matches instead of the closest ones — see
+    _cheapest_relevant().
+
     Returns (hits, conversation_result). conversation_result is
     {"answer": str, "conversation_id": str} for the single-item path, or
     None for the multi-item path (caller must generate its own answer)."""
-    print("-----fresh search query to typesense: ", expanded_query)
+    print(
+        "-----fresh search query to typesense: ",
+        expanded_query,
+        "(cheapest first)" if cheapest_first else "",
+    )
     filter_by = price_filter_to_filter_by(price_filter)
     if filter_by:
         print("-----price filter_by: ", filter_by)
@@ -277,8 +357,8 @@ def typesense_search_products(expanded_query: str, conversation_id: str | None =
 
     if not is_multi_item:
         params = {
-            "q":                     expanded_query,
-            "conversation":          "true",
+            "q": expanded_query,
+            "conversation": "true",
             "conversation_model_id": CONV_MODEL_ID,
         }
         if conversation_id:
@@ -292,22 +372,30 @@ def typesense_search_products(expanded_query: str, conversation_id: str | None =
         if not conversation_id:
             cats = match_categories([expanded_query])[0]
             if cats:
-                (_, use_cat), = _run_with_and_without_categories(
-                    [expanded_query], [vector], [cats], TOTAL_HIT_BUDGET, filter_by)
+                ((_, use_cat),) = _run_with_and_without_categories(
+                    [expanded_query], [vector], [cats], TOTAL_HIT_BUDGET, filter_by
+                )
                 if use_cat:
                     search_filter = _join_filters(filter_by, _category_filter(cats))
 
-        search = _product_search(vector, TOTAL_HIT_BUDGET, search_filter)
+        k = (
+            TOTAL_HIT_BUDGET * CHEAPEST_CANDIDATE_MULTIPLIER
+            if cheapest_first
+            else TOTAL_HIT_BUDGET
+        )
+        search = _product_search(vector, k, search_filter)
         # With conversation=true Typesense only accepts q as a URL param
         # (set in params above), never inside the search body.
         search.pop("q")
         data = _typesense_multi_search({"searches": [search]}, params, conversation_id)
         results = data.get("results", [])
         hits = results[0].get("hits", []) if results else []
+        if cheapest_first:
+            hits = _cheapest_relevant(hits, TOTAL_HIT_BUDGET)
 
         conv = data.get("conversation", {})
         conversation_result = {
-            "answer":          conv.get("answer", ""),
+            "answer": conv.get("answer", ""),
             "conversation_id": conv.get("conversation_id") or conversation_id,
         }
         return hits, conversation_result
@@ -315,12 +403,25 @@ def typesense_search_products(expanded_query: str, conversation_id: str | None =
     # ── Multi-item path: one sub-search per item, round-robin + de-dupe ──
     items = items[:MAX_EXPANSION_ITEMS]
     per_item = max(MIN_HITS_PER_ITEM, TOTAL_HIT_BUDGET // len(items))
-    print(f"-----multi-item expansion detected ({len(items)} items), {per_item} hits/item: {items}")
+    print(
+        f"-----multi-item expansion detected ({len(items)} items), {per_item} hits/item: {items}"
+    )
 
     vectors = embed_query_texts(items)
     category_ids = match_categories(items)
-    per_item_hits = [h for h, _ in _run_with_and_without_categories(
-        items, vectors, category_ids, per_item, filter_by)]
+    fetch_k = (
+        max(per_item * CHEAPEST_CANDIDATE_MULTIPLIER, CHEAPEST_MIN_CANDIDATES)
+        if cheapest_first
+        else per_item
+    )
+    per_item_hits = [
+        h
+        for h, _ in _run_with_and_without_categories(
+            items, vectors, category_ids, fetch_k, filter_by
+        )
+    ]
+    if cheapest_first:
+        per_item_hits = [_cheapest_relevant(h, per_item) for h in per_item_hits]
 
     hits = []
     seen_ids = set()

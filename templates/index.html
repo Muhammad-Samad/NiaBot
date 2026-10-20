@@ -143,6 +143,17 @@
   .welcome-box h2 { font-size: 18px; font-weight: 700; margin-bottom: 2px; }
   .welcome-box .tagline { font-size: 12px; font-weight: 600; color: var(--brand-red); letter-spacing: .3px; margin-bottom: 8px; }
   .welcome-box p { font-size: 13.5px; color: var(--text-secondary); line-height: 1.6; }
+  .welcome-back {
+    background: var(--accent-green-lt);
+    border: 1px solid rgba(28,124,75,.25);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
+    margin: 12px 0 4px;
+    font-size: 13.5px;
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+  .welcome-back .welcome-chips { margin-top: 8px; }
   .welcome-chips {
     display: flex;
     flex-wrap: wrap;
@@ -720,6 +731,7 @@
         <h2>Hi, I'm NiaBot 👋</h2>
         <div class="tagline">Naheed Intelligent Assistant</div>
         <p>I can help you shop for groceries, household items, personal care and more — or sort out an existing order.</p>
+        <div class="welcome-back" id="welcome-back" hidden></div>
 
         <div class="menu-section">
           <div class="menu-section-title">Need help with an order?</div>
@@ -734,7 +746,7 @@
             <span class="chip" onclick="sendChip(this)">Detergents & cleaning</span>
             <span class="chip" onclick="sendChip(this)">Tea & coffee</span>
           </div>
-          <p class="welcome-hint">Tip: give a single item name or a comma-separated list for the best search results.</p>
+          <p class="welcome-hint">Tip: just chat naturally — e.g. "gift ideas for my son", then "he is 25".</p>
         </div>
       </div>
     </div>
@@ -791,6 +803,25 @@
     return sid;
   }
   const sessionId = getSessionId();
+
+  // ─── Long-term memory identity ─────────────────────────────────────────────
+  // device_id lives as long as the browser profile — "New Chat" keeps it, so
+  // NiaBot can still remember a returning customer after a reset.
+  // customer_token is for a logged-in customer: the host site signs their id
+  // ("<id>.<HMAC-SHA256(CUSTOMER_TOKEN_SECRET, id)>") and passes it either as
+  // window.NIABOT_CUSTOMER_TOKEN or a ?ct= URL parameter.
+  function getDeviceId() {
+    let id = localStorage.getItem('npk_device_id');
+    if (!id) {
+      id = (crypto.randomUUID ? crypto.randomUUID()
+        : 'dev-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+      localStorage.setItem('npk_device_id', id);
+    }
+    return id;
+  }
+  const deviceId = getDeviceId();
+  const customerToken = window.NIABOT_CUSTOMER_TOKEN
+    || new URLSearchParams(location.search).get('ct') || null;
 
   // conversation_id: persisted in localStorage so it survives page reloads,
   // same lifetime as sessionId.
@@ -965,6 +996,8 @@
           message: rawText,
           sid: sessionId,
           conversation_id: conversationId,
+          device_id: deviceId,
+          customer_token: customerToken,
         }),
       });
       const data = await res.json();
@@ -1504,7 +1537,10 @@
     try {
       const res  = await fetch('/api/history?sid=' + encodeURIComponent(sessionId));
       const data = await res.json();
-      if (!data.messages || data.messages.length === 0) return;
+      if (!data.messages || data.messages.length === 0) {
+        loadWelcomeBack();
+        return;
+      }
 
       // Restore conversation_id so follow-up messages continue the same thread
       if (data.conversation_id) {
@@ -1526,6 +1562,40 @@
       });
     } catch (e) {
       console.warn('Could not load history:', e);
+    }
+  }
+
+  // ─── Welcome back (returning customer, fresh chat) ─────────────────────────
+  // Server-side memory (services/memory_service.py) decides whether there's
+  // a recent earlier conversation worth offering to continue.
+  async function loadWelcomeBack() {
+    try {
+      const res = await fetch('/api/welcome', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sid: sessionId, device_id: deviceId, customer_token: customerToken }),
+      });
+      const data = await res.json();
+      const box = document.getElementById('welcome-back');
+      if (!data.message || !box) return;
+
+      box.textContent = data.message;
+      if (data.resume_prompt) {
+        const chips = document.createElement('div');
+        chips.className = 'welcome-chips';
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = 'Continue: ' + data.resume_prompt;
+        chip.onclick = () => {
+          document.getElementById('user-input').value = data.resume_prompt;
+          sendMessage();
+        };
+        chips.appendChild(chip);
+        box.appendChild(chips);
+      }
+      box.hidden = false;
+    } catch (e) {
+      console.warn('Could not load welcome back:', e);
     }
   }
 

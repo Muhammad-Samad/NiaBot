@@ -159,6 +159,97 @@ def set_last_topic(sid, topic):
         cur.close()
 
 
+def get_conversation_state(sid) -> dict:
+    """Structured shopping state for this session (see
+    domains/shopping/conversation.py). {} when none yet or unreadable."""
+    try:
+        with DatabaseManager() as conn:
+            cur = conn.cursor(dictionary=True)
+            cur.execute("SELECT conversation_state FROM cart_sessions WHERE session_id=%s", (sid,))
+            row = cur.fetchone()
+            cur.close()
+        raw = (row or {}).get("conversation_state")
+        state = json.loads(raw) if raw else {}
+        return state if isinstance(state, dict) else {}
+    except Exception as e:
+        logger.error(f"Failed to read conversation state for session {sid}: {e}")
+        return {}
+
+
+def set_conversation_state(sid, state: dict):
+    try:
+        with DatabaseManager() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE cart_sessions SET conversation_state=%s WHERE session_id=%s",
+                (json.dumps(state, ensure_ascii=False), sid),
+            )
+            conn.commit()
+            cur.close()
+    except Exception as e:
+        logger.error(f"Failed to save conversation state for session {sid}: {e}")
+
+
+def get_recent_messages(sid, limit: int):
+    """The last `limit` chat messages of this session, oldest first, from
+    every domain. Assistant messages carry the names of the product cards
+    they showed, so the conversation model knows what the customer saw."""
+    with DatabaseManager() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            # age_minutes is computed on the DB clock, the same clock that
+            # stamped created_at, so app-server timezone can't skew it.
+            """SELECT id, role, message, products_json, domain, created_at,
+                      TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age_minutes
+               FROM conversation_messages
+               WHERE session_id=%s
+               ORDER BY id DESC LIMIT %s""",
+            (sid, limit),
+        )
+        rows = cur.fetchall()
+        cur.close()
+
+    messages = []
+    for r in reversed(rows):
+        try:
+            products = json.loads(r["products_json"]) if r["products_json"] else []
+        except (TypeError, ValueError):
+            products = []
+        messages.append({
+            "id":         r["id"],
+            "role":       r["role"],
+            "message":    r["message"],
+            "products":   [p.get("product_name", "") for p in products if isinstance(p, dict)],
+            "domain":      r["domain"],
+            "created_at":  r["created_at"],
+            "age_minutes": r["age_minutes"],
+        })
+    return messages
+
+
+def get_recently_shown_product_ids(sid, turns: int = 3) -> set:
+    """Product ids shown in the last `turns` assistant replies — excluded
+    from a "show more" search so the customer sees new products."""
+    with DatabaseManager() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            """SELECT products_json FROM conversation_messages
+               WHERE session_id=%s AND role='assistant' AND products_json IS NOT NULL
+               ORDER BY id DESC LIMIT %s""",
+            (sid, turns),
+        )
+        rows = cur.fetchall()
+        cur.close()
+
+    ids = set()
+    for r in rows:
+        try:
+            ids.update(str(p.get("product_id")) for p in json.loads(r["products_json"]) if isinstance(p, dict))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
 def get_last_shown_price_range(sid):
     prices = [float(p["price"]) for p in get_last_shown_products(sid) if p.get("price") is not None]
     if not prices:

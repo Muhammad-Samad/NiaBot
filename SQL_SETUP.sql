@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS cart_sessions (
 -- the last_topic column, run this once (ignore the error if it's already there):
 -- ALTER TABLE cart_sessions ADD COLUMN last_topic VARCHAR(512) NULL;
 
+-- Conversational context + long-term memory: run
+-- migrations/add_conversation_memory.sql (adds cart_sessions.conversation_state
+-- and customer_key, plus chat_customer_memory and chat_conversation_summaries).
+
 -- ─── Cart Items ───────────────────────────────────────────────────────────────
 -- Products the customer has confirmed for their cart
 CREATE TABLE IF NOT EXISTS cart_items (

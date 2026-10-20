@@ -221,6 +221,43 @@ persisted to the same `conversation_messages` table (with a `domain`
 column: `shopping` / `operations` / `policy` / `menu`), so `/api/history`
 restores the full mixed conversation on page reload.
 
+## Conversational shopping and long-term memory
+
+**Understanding a turn in context** (`domains/shopping/conversation.py`):
+every shopping message goes through one LLM call
+(`SHOPPING_CONVERSATION_MODEL`) that sees the last
+`SHOPPING_HISTORY_MESSAGES` messages from every domain, the structured need so
+far (`cart_sessions.conversation_state`), the products on screen, and the
+customer's long-term memory. The call returns the turn type (`new`, `refine`,
+`correct`, `more`, `reference`, `recall`, `smalltalk`), an action (`search`,
+`answer`, `clarify`, `off_topic`), the **full updated need**, a fresh
+self-contained search built from that need, a reply that uses the context, and
+any customer facts worth remembering. Searches are always rebuilt from the
+need and never glued onto the previous text. For example, "gifts for my son"
+followed by "he is 25" searches adult men's gift items. Budgets persist while
+the customer refines the same need. Typesense search is unchanged. If the call
+fails, the older single-message pipeline (`query_engine.analyze_query` +
+`last_topic`) answers instead.
+
+**Long-term memory** (`services/memory_service.py`) is keyed by a customer
+key, not by `sid`, because "New Chat" mints a new `sid`:
+- `dev:<device_id>`: a per-browser id that survives "New Chat".
+- `cust:<id>`: a logged-in customer. The host site signs the id with
+  `CUSTOMER_TOKEN_SECRET` and passes `<id>.<hex HMAC-SHA256(secret, id)>` as
+  `window.NIABOT_CUSTOMER_TOKEN` or `?ct=`. Unsigned ids are never trusted.
+
+Once a session has been idle for `MEMORY_IDLE_MINUTES`, it is summarized into
+`chat_conversation_summaries`. Durable facts ("Has a son, about 25 years old")
+live in `chat_customer_memory`; they are added live and consolidated at
+summary time. When a returning customer opens a fresh chat, `/api/welcome`
+offers to continue their last shopping need. `POST /api/memory/forget` deletes
+the customer's memory. Schema: `migrations/add_conversation_memory.sql`.
+
+**Regression check:** `python -m scripts.eval_conversations` runs scripted
+multi-turn conversations through the understanding step (no DB or Typesense)
+and checks every turn. Re-run it after any prompt or model change, and add
+real conversations that went wrong as new cases.
+
 ## Policy domain
 
 The policy domain is the `General_Policy RAG` project plugged in as a

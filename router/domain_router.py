@@ -149,9 +149,11 @@ def _routed(result: dict, sid: str, reason: str) -> dict:
     return result
 
 
-def route_message(sid: str, message: str, conversation_id: str | None) -> dict:
+def route_message(sid: str, message: str, conversation_id: str | None, customer_key: str | None = None) -> dict:
     """Returns a normalized dict: {answer, products, cart_action,
-    conversation_id, domain}. `domain` is only for logging/debugging."""
+    conversation_id, domain}. `domain` is only for logging/debugging.
+    `customer_key` (services/memory_service.py) gives the shopping domain
+    the customer's long-term memory."""
     stripped = (message or "").strip()
     normalized = stripped.lower()
 
@@ -244,7 +246,7 @@ def route_message(sid: str, message: str, conversation_id: str | None) -> dict:
     if _looks_operational(message):
         return _routed(_operations_result(sid, message, conversation_id), sid, "operational_pattern")
 
-    result = shopping_service.handle_message(sid, message, conversation_id)
+    result = shopping_service.handle_message(sid, message, conversation_id, customer_key=customer_key)
     if result.get("answer") == OFF_TOPIC_REPLY:
         # Shopping found no shopping angle - let the policy domain answer
         # store/policy questions the patterns missed (it politely declines

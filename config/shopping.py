@@ -42,7 +42,7 @@ EMBEDDING_FIELDS = os.getenv(
 # the embedded/semantic fields.
 PRICE_FIELD = os.getenv("PRICE_FIELD", "price")
 
-VECTOR_DISTANCE_THRESHOLD = float(os.getenv("VECTOR_DISTANCE_THRESHOLD", "0.5"))
+VECTOR_DISTANCE_THRESHOLD = float(os.getenv("VECTOR_DISTANCE_THRESHOLD", "0.1"))
 
 # ─── LLM (shopping's own query understanding / off-topic guard) ──────────────
 LLM_API_KEY = os.getenv("SHOPPING_LLM_API_KEY")
