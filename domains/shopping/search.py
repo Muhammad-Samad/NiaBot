@@ -295,7 +295,9 @@ def typesense_search_products(
         else per_item
     )
     results = _typesense_multi_search(
-        {"searches": [_product_search(v, fetch_k, filter_by) for v in vectors]}, {}, None
+        {"searches": [_product_search(v, fetch_k, filter_by) for v in vectors]},
+        {},
+        None,
     ).get("results", [])
     per_item_hits = [r.get("hits", []) for r in results]
     if cheapest_first:
@@ -323,5 +325,4 @@ def typesense_search_products(
                     continue
                 kept_by_id[doc_id] = hit
             hits.append(hit)
-
     return hits, None

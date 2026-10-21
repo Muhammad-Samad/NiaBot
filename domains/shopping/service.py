@@ -51,7 +51,12 @@ def _result(answer, products, cart_action, conversation_id):
     }
 
 
-def handle_message(sid: str, user_msg: str, conversation_id: str | None = None, customer_key: str | None = None) -> dict:
+def handle_message(
+    sid: str,
+    user_msg: str,
+    conversation_id: str | None = None,
+    customer_key: str | None = None,
+) -> dict:
     # client_conv_id is a conversation_id Typesense itself issued on a
     # previous turn.
     client_conv_id = (conversation_id or "").strip() or None
@@ -74,7 +79,9 @@ def handle_message(sid: str, user_msg: str, conversation_id: str | None = None, 
         memory = memory_service.get_context(customer_key)
         turn = conversation.understand(user_msg, state, history, shown, memory)
     except Exception as e:
-        print(f"[shopping] contextual understanding failed, using single-message pipeline: {e}")
+        print(
+            f"[shopping] contextual understanding failed, using single-message pipeline: {e}"
+        )
         return _handle_single_message(sid, user_msg, client_conv_id, tracking_conv_id)
 
     memory_service.remember_async(customer_key, turn.remember)
@@ -87,9 +94,13 @@ def handle_message(sid: str, user_msg: str, conversation_id: str | None = None, 
         # clarifying question about a new request).
         if turn.need:
             searched = [] if turn.turn_type == "new" else state.get("searched", [])
-            repository.set_conversation_state(sid, {**state, "need": turn.need, "searched": searched})
+            repository.set_conversation_state(
+                sid, {**state, "need": turn.need, "searched": searched}
+            )
         products = [shown[n - 1] for n in turn.show_products if 1 <= n <= len(shown)]
-        answer = turn.reply or "Could you tell me a bit more about what you're looking for?"
+        answer = (
+            turn.reply or "Could you tell me a bit more about what you're looking for?"
+        )
         return _result(answer, products, None, tracking_conv_id)
 
     return _search_turn(sid, user_msg, turn, state, history, tracking_conv_id)
@@ -140,59 +151,91 @@ def _search_turn(sid, user_msg, turn, state, history, tracking_conv_id) -> dict:
     # Budget request -> cheapest of the relevant matches first. The model
     # carries prefer_cheaper across refinements of the same need; the
     # keyword check backs it up when the model misses an explicit ask.
-    need["prefer_cheaper"] = bool(need.get("prefer_cheaper")) or bool(_BUDGET_WORDS.search(user_msg))
+    need["prefer_cheaper"] = bool(need.get("prefer_cheaper")) or bool(
+        _BUDGET_WORDS.search(user_msg)
+    )
 
     search_text = turn.search_text
-    searched_now = turn.items[:search.MAX_EXPANSION_ITEMS] or [turn.query]
+    searched_now = turn.items[: search.MAX_EXPANSION_ITEMS] or [turn.query]
     searched = state.get("searched", []) if turn.turn_type == "more" else []
     searched = (searched + searched_now)[-MAX_SEARCHED_ITEMS:]
     # Saved before searching, so even a no-results turn keeps the need
     # ("try a higher budget" still knows what we're looking for).
-    repository.set_conversation_state(sid, {"need": need, "searched": searched, "last_search": search_text})
+    repository.set_conversation_state(
+        sid, {"need": need, "searched": searched, "last_search": search_text}
+    )
     repository.set_last_topic(sid, search_text)
 
     try:
         # Never pass a conversation_id: search_text is already
         # self-contained.
         hits, conversation_result = search.typesense_search_products(
-            search_text, conversation_id=None, price_filter=price_filter,
+            search_text,
+            conversation_id=None,
+            price_filter=price_filter,
             cheapest_first=need["prefer_cheaper"],
         )
     except Exception as e:
-        return _result(f"Sorry, something went wrong while searching: {e}", [], None, tracking_conv_id)
+        return _result(
+            f"Sorry, something went wrong while searching: {e}",
+            [],
+            None,
+            tracking_conv_id,
+        )
 
     new_conv_id = (conversation_result or {}).get("conversation_id") or tracking_conv_id
     if new_conv_id != tracking_conv_id:
         repository.ensure_cart_session(sid, new_conv_id)
 
+    print(f"=======> before applying distance_threshold {len(hits)}")
     hits = _within_distance_threshold(hits)
     if hits and turn.turn_type == "more":
         # Prefer products the customer hasn't seen yet; if everything was
         # already shown, showing it again beats showing nothing.
         seen = repository.get_recently_shown_product_ids(sid)
-        unseen = [h for h in hits if str(h.get("document", {}).get("id", "")) not in seen]
+        unseen = [
+            h for h in hits if str(h.get("document", {}).get("id", "")) not in seen
+        ]
         hits = unseen or hits
 
-    answer, products = _reply_for_results(
-        user_msg, turn.language, need, turn.turn_type, searched_now, hits, history,
+    print(
+        f"=======> after applying distance_threshold and generating reply {len(hits)}"
     )
+    answer, products = _reply_for_results(
+        user_msg,
+        turn.language,
+        need,
+        turn.turn_type,
+        searched_now,
+        hits,
+        history,
+    )
+    print(f"=======> after generating reply {len(products)}")
     return _result(answer, products, None, new_conv_id)
 
 
-def _reply_for_results(user_msg, language, need, turn_type, searched, hits, history) -> tuple[str, list]:
+def _reply_for_results(
+    user_msg, language, need, turn_type, searched, hits, history
+) -> tuple[str, list]:
     """The reply, written once we know exactly what will be displayed, plus
     the products to display (minus any the reply step judged to be the wrong
     product type). Falls back to a template reply if that LLM call fails."""
     products = _hits_to_products(hits)
     matched = [list(h.get(search.MATCHED_ITEM) or []) for h in hits]
     try:
-        composed = reply.compose(user_msg, language, need, turn_type, searched, products, matched, history)
+        composed = reply.compose(
+            user_msg, language, need, turn_type, searched, products, matched, history
+        )
     except Exception as e:
         print(f"[shopping] reply composition failed, using template reply: {e}")
-        return (query_engine.build_multi_item_answer(hits) if hits else NO_MATCH_REPLY), products
+        return (
+            query_engine.build_multi_item_answer(hits) if hits else NO_MATCH_REPLY
+        ), products
 
     products = [p for i, p in enumerate(products) if i not in composed.drop]
-    answer = composed.reply or (query_engine.build_multi_item_answer(products) if products else NO_MATCH_REPLY)
+    answer = composed.reply or (
+        query_engine.build_multi_item_answer(products) if products else NO_MATCH_REPLY
+    )
     return answer, products
 
 
@@ -202,10 +245,7 @@ def _within_distance_threshold(hits: list) -> list:
     there too); a hit without one (no vector search) is kept."""
     if VECTOR_DISTANCE_THRESHOLD >= 1.0:
         return hits
-    return [
-        h for h in hits
-        if h.get("vector_distance", 0) <= VECTOR_DISTANCE_THRESHOLD
-    ]
+    return [h for h in hits if h.get("vector_distance", 0) <= VECTOR_DISTANCE_THRESHOLD]
 
 
 def _hits_to_products(hits: list) -> list:
@@ -221,15 +261,23 @@ def _hits_to_products(hits: list) -> list:
         if isinstance(raw_img, list):
             raw_img = raw_img[0] if raw_img else ""
 
-        products.append({
-            "product_id":   str(doc.get("id", doc.get("product_id", ""))),
-            "sku":          str(doc.get("sku", "") or ""),
-            "product_name": str(doc.get("name", doc.get("product_name", doc.get("title", "Unknown")))),
-            "price":        repository.to_json_safe(doc.get("price", doc.get("final_price", 0))),
-            "image_url":    str(raw_img or ""),
-            "category":     str(raw_cat or ""),
-            "url":          str(doc.get("url", doc.get("product_url", "")) or ""),
-        })
+        products.append(
+            {
+                "product_id": str(doc.get("id", doc.get("product_id", ""))),
+                "sku": str(doc.get("sku", "") or ""),
+                "product_name": str(
+                    doc.get(
+                        "name", doc.get("product_name", doc.get("title", "Unknown"))
+                    )
+                ),
+                "price": repository.to_json_safe(
+                    doc.get("price", doc.get("final_price", 0))
+                ),
+                "image_url": str(raw_img or ""),
+                "category": str(raw_cat or ""),
+                "url": str(doc.get("url", doc.get("product_url", "")) or ""),
+            }
+        )
     return products
 
 
@@ -244,7 +292,9 @@ def _handle_single_message(sid, user_msg, client_conv_id, tracking_conv_id) -> d
         # a follow-up fragment referencing whatever was already discussed.
         off_topic, expanded_search_query, is_followup = False, "", True
     else:
-        off_topic, expanded_search_query, is_followup = query_engine.analyze_query(cleaned_msg)
+        off_topic, expanded_search_query, is_followup = query_engine.analyze_query(
+            cleaned_msg
+        )
 
     if off_topic:
         return _result(query_engine.OFF_TOPIC_REPLY, [], None, tracking_conv_id)
@@ -274,14 +324,23 @@ def _handle_single_message(sid, user_msg, client_conv_id, tracking_conv_id) -> d
             expanded_search_query = f"{last_topic} {expanded_search_query}".strip()
 
     if not expanded_search_query.strip():
-        return _result("What product or category are you looking for?", [], None, tracking_conv_id)
+        return _result(
+            "What product or category are you looking for?", [], None, tracking_conv_id
+        )
 
     try:
         hits, conversation_result = search.typesense_search_products(
-            expanded_search_query, conversation_id=search_conv_id, price_filter=price_filter
+            expanded_search_query,
+            conversation_id=search_conv_id,
+            price_filter=price_filter,
         )
     except Exception as e:
-        return _result(f"Sorry, something went wrong while searching: {e}", [], None, tracking_conv_id)
+        return _result(
+            f"Sorry, something went wrong while searching: {e}",
+            [],
+            None,
+            tracking_conv_id,
+        )
 
     new_conv_id = (conversation_result or {}).get("conversation_id") or tracking_conv_id
     if new_conv_id != tracking_conv_id:
@@ -296,5 +355,7 @@ def _handle_single_message(sid, user_msg, client_conv_id, tracking_conv_id) -> d
     searched = [i.strip() for i in expanded_search_query.split(",") if i.strip()]
     need = {"summary": expanded_search_query, "budget": price_filter or {}}
     # language=None: the reply step reads it off the customer's message.
-    answer, products = _reply_for_results(user_msg, None, need, None, searched, hits, [])
+    answer, products = _reply_for_results(
+        user_msg, None, need, None, searched, hits, []
+    )
     return _result(answer, products, None, new_conv_id)
