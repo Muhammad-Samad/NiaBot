@@ -317,6 +317,7 @@ ITEM_SYNONYMS = {
     "eggs": "Farm Eggs",
     "cheese": "Shredded Cheese",
     "pulses": "Naheed Daal",
+    "fish": "fish fingers, fish snacks",
 }
 
 
