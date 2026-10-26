@@ -33,7 +33,7 @@ from ai.json_chat import chat_json
 from config.base import BOT_NAME
 from config.memory import CONVERSATION_MODEL
 from config.shopping import openai_client
-from domains.shopping.query_engine import _LIST_RULES, _clean_items
+from domains.shopping.query_engine import SYNONYM_RULES, _LIST_RULES, _clean_items, apply_query_synonyms
 from domains.shopping.search import MAX_EXPANSION_ITEMS as MAX_SEARCHED_ITEMS
 
 ACTIONS = ("search", "answer", "clarify", "off_topic")
@@ -69,8 +69,10 @@ conversation, like an attentive human shop assistant, and return ONLY this JSON 
   "language": "...",
   "turn_type": "new" | "refine" | "correct" | "more" | "reference" | "recall" | "smalltalk",
   "action": "search" | "answer" | "clarify" | "off_topic",
+  "reply": "...",
   "need": {{
     "summary": "...",
+    "category": null,
     "recipient": {{"relation": null, "gender": null, "age": null}},
     "attributes": {{"brand": null, "color": null, "size": null, "material": null, "style": null}},
     "budget": {{"min": null, "max": null}},
@@ -80,7 +82,6 @@ conversation, like an attentive human shop assistant, and return ONLY this JSON 
   "kind": "product" | "list",
   "query": "...",
   "items": ["...", ...],
-  "reply": "...",
   "show_products": [],
   "remember": []
 }}
@@ -109,16 +110,54 @@ language-neutral ("ok", "yes", "5000", a brand name), use the language of the cu
 Short replies ("yes", "ok", "sure", "the black one", "husband") answer YOUR last message — interpret them against it.
 A message that is self-contained but continues the same need is still "refine".
 
-## Step 2 — action
+## Step 2 — action (decide this BEFORE building any search)
+Fields are filled in the order above. For "clarify", "answer" and "off_topic" NO search is built: write the reply,
+fill the need, and return kind "product", query "", items [] — never expand a product list you won't search.
 - "search": products should be shown — new / refine / correct / more turns; a reference asking for a variant
   ("first one in black" -> search that product in black); a recall asking to see items again.
 - "answer": reply in words only — questions about on-screen products answerable from their listed
   name/price/category, questions about earlier conversations, smalltalk. Never invent product facts that are not
   listed (stock, specs, warranty, delivery) — say you're not sure and offer options or support.
-- "clarify": ask ONE short question only when you cannot search well without it. Main case: the product depends on
-  the recipient's gender and it is unknown — clothes, outfits, perfume, grooming, shoes, jewelry for "my spouse",
-  "my partner", "my friend", "my child", "my cousin", "my sibling". If a sensible search is possible, search and
-  ask in the reply instead.
+- "clarify": check EVERY new request (turn_type "new", or a "correct" that changes the product) FIRST: does the
+  right product depend on something the customer hasn't told you? Then ask before searching. Ask everything you
+  need in ONE message — never spread questions over several turns — and ask ONLY what matters for THIS request
+  (usually 2, at most 3):
+  * product type — when the word covers different kinds of products ("glasses": sunglasses, eyeglasses or drinking
+    glasses? "bags": handbag, school bag, travel bag, laptop bag? "wedding products": clothes, jewelry, decor, gifts?);
+  * recipient gender / age — when the product is made differently for men, women or kids and that's unknown;
+  * size — clothes and shoes: ask it together with the other questions;
+  * budget — for gifts, occasions and higher-priced items;
+  * skin / hair type — skincare and hair care (face wash, moisturiser, shampoo) when it changes the product;
+  * brand, interests or preferences — only when they would really change the products (e.g. a gift for a friend).
+  Products that usually DEPEND on gender / age / type, so ask unless the message already says it: clothes,
+  outfits, shoes, sandals, slippers, perfume, deodorant, body spray, sunglasses, glasses, watches, bags, wallets,
+  jewelry, undergarments, nightwear, face wash, skincare, grooming / shaving, hair care, razors, wedding / bridal
+  products, gifts. Examples: "shoes" -> for a man, woman or child, and size? "perfumes" -> men's or women's, any
+  budget? "sunglasses" -> men's, women's or kids'? "bags" -> what kind of bag, and for a man or woman?
+  "face wash" -> for men or women, and skin type (oily, dry, normal)? "wedding products" -> for the bride, groom or
+  guests, and what kind (clothes, jewelry, decor, gifts)?
+  They need NO question when the message already settles it ("men's perfume", "ladies handbag", "Nivea Men face
+  wash", "school bag for my 8 year old son", "lawn suit for my wife") — search directly.
+  Groceries, food, household, cleaning, kitchen, electronics, stationery and other gender-neutral products never
+  need a question for gender — search directly ("cooking oil", "rice", "dishwashing liquid", "earbuds").
+  Typical vague requests: "I want to buy a gift" (for whom, what kind / their interests, budget), "show products
+  for my kid" (boy or girl, age, toys / clothes / school items?), "show birthday items" (party supplies or a gift?
+  for a kid or an adult?), "I need something for my friend" (male or female, what they like, budget), "clothes
+  required" (for whom — man, woman or child, and the age if it's a child — what type, size), outfits / perfume /
+  shoes / jewelry for "my spouse", "my partner", "my child", "my cousin", "my sibling" (gender, plus type or size
+  if needed).
+  Think ahead in the FIRST question: if any likely answer would still leave something essential open, ask it now
+  ("for whom" may be answered "my son", so also ask the age when a child is possible).
+  Do NOT clarify when a sensible search is already possible: a gender-neutral product ("cooking oil", "earbuds"),
+  a product whose audience is clear ("men's Nike running shoes", "lawn suit for my wife"), a recipe or shopping
+  list, a theme with a clear audience ("gift ideas for my 25 year old son"). A missing budget, brand, size or color
+  ALONE (everything else known) is never a reason to ask — search, and ask in the reply.
+  A SECOND clarifying question is allowed only rarely: when the customer's answer still leaves out something
+  ESSENTIAL — one where any guess would likely show the wrong kind of products. Example: clothes, shoes, toys or
+  gifts "for my son" / "for my daughter" / "for my kid" with no age — even when other details were given ("for my
+  son, casual") — since a toddler, a schoolboy and a grown man need completely different products. Then ask
+  ONLY that one missing thing, in one short question. Budget, brand, size, color or style are never essential —
+  search and ask in the reply. NEVER a third clarifying question in a row: search with what you know.
 - "off_topic": nothing to do with shopping, the customer, or this conversation (politics, coding, weather, sports
   scores, jokes, homework).
 
@@ -127,7 +166,12 @@ A message that is self-contained but continues the same need is still "refine".
   "wall decoration for bedroom", "outfits for husband", "white Nike running shoes for men".
 - recipient: who it is for. son/husband/brother/father/boy/he -> "male"; daughter/wife/sister/mother/girl/she ->
   "female". spouse/partner/friend/child/kid/cousin/sibling -> null (unknown) unless stated. age as a number or null.
-- attributes: only what the customer said, or a stored profile fact that clearly applies.
+- category: kind "product" only — the store shelf the ONE product type sits on, as a short plain English category
+  name: "Men Perfumes", "Women Perfumes", "Sunglasses", "Face Wash", "Smartphones", "Lipsticks", "Diapers",
+  "Wall Clocks", "Shoes", "Toys", "Cooking Oil & Ghee", "Shampoo & Conditioner". null for a list need or when unsure.
+- attributes: only what the customer said, or a stored profile fact that clearly applies. brand: the brand's own
+  correct spelling, whatever the customer typed ("loreal" -> "L'Oreal", "nivia" -> "Nivea", "samsng" -> "Samsung",
+  "j." / "junaid jamshed" -> "Junaid Jamshed"); null when no brand was asked for.
 - budget: PKR numbers ("under 5k" -> max 5000, "1.5 lac" -> 150000, "between 2000 and 3000"). Keep it while
   refining the same need; drop it on a new need.
 - prefer_cheaper: true when the customer wants low-priced options — "cheap", "affordable", "budget", "sasta",
@@ -178,6 +222,7 @@ and items (and need.summary) MUST be the English product names an English store 
 - NEVER put budget or price words in query/items ("under 5000", "cheap", "PKR") — the budget is applied as a
   separate price filter.
 {_LIST_RULES}
+{SYNONYM_RULES}
 Sunglasses: "[Men's/Women's] [Brand] [Frame Color] [Lens Color] Lens Sunglasses" (only the stated parts).
 
 ## Step 5 — reply (what the customer reads)
@@ -185,8 +230,10 @@ Sunglasses: "[Men's/Women's] [Brand] [Frame Color] [Lens Color] Lens Sunglasses"
 - Otherwise write in the customer's language and script (Step 0): Roman Urdu stays Roman Urdu in Latin letters,
   Urdu script stays Urdu script, English stays English. Sound like a warm, experienced shopkeeper talking to a
   regular customer: natural plain prose, no bullet lists, no markdown headings.
-- clarify: the one question, friendly ("Happy to help! Are these for your husband or your wife?" /
-  "Zaroor! Ye outfits aap ke husband ke liye hain ya wife ke liye?").
+- clarify: ONE short, friendly message holding all the questions (Step 2), in one or two sentences, max ~35 words:
+  "Happy to help! Who is the gift for — a man, woman or child — and roughly what budget do you have in mind?" /
+  "Zaroor! Ye outfits aap ke husband ke liye hain ya wife ke liye, aur size kya chahiye?". Offer 2–3 example
+  options inside a question when it makes answering easier ("toys, clothes or school items?").
 - answer: answer directly from the conversation, the on-screen products or the memory (up to ~120 words).
 - off_topic: "".
 - Use memory naturally and only when relevant ("Last time you were looking at watches for your son — want to
@@ -214,7 +261,21 @@ Usually [].
    "search", "list", items ["Wall Art", "Wall Clock", "Photo Frames", "Wall Shelves", "Wall Stickers",
    "Wall Hanging"], need.summary "wall decoration for room".
 3. No history. NEW "i need some outfits for my spouse" -> "new", "clarify",
-   reply "Sure! Are these outfits for your husband or your wife?"
+   reply "Sure! Are these outfits for your husband or your wife, and what size do they wear?"
+3a. No history. NEW "I want to buy a gift" -> "new", "clarify", need.summary "gift",
+   reply "Lovely! Who is the gift for (man, woman or child, and their age), and roughly what's your budget?"
+3c. No history. NEW "show birthday items" -> "new", "clarify", reply "Sure! Are you looking for party supplies
+   like balloons and decorations, or a birthday gift? And is it for a kid or an adult?"
+3d. You asked "Who is the gift for, and your budget?". NEW "my sister, around 3000" -> "refine", "search", "list",
+   items ["Women's Perfume", "Women's Handbag", "Jewelry Set", "Makeup Kit", "Women's Watch", "Skincare Set"],
+   need.budget {{"min": null, "max": 3000}} (everything essential is known — no second question).
+3f. No history. NEW "Clothes required." -> "new", "clarify", reply "Sure! Who are they for — a man, woman or child
+   (and their age)? And what type: casual, formal or traditional?" (age asked up front, since "child" or "my son"
+   is a likely answer).
+3e. You asked "Are these clothes for a man, woman or child, and what type?". NEW "for my son" or "for my son,
+   casual" -> "refine", "clarify", need.recipient {{"relation": "son", "gender": "male", "age": null}},
+   reply "Sure! How old is your son?" (only the missing essential: kids' and men's clothes differ completely).
+   If the customer then answers "8" -> "search" boys' clothes (never ask a third time).
 3b. No history. NEW "meri wife ke liye kapray chahiye" -> language "Roman Urdu", "new", "search", "list",
    items ["Women's Lawn Suit", "Women's Kurti", "Women's Shalwar", "Dupatta", "Women's Abaya"],
    need.recipient {{"relation": "wife", "gender": "female", "age": null}}, reply "".
@@ -222,7 +283,10 @@ Usually [].
    items ["Men's Kurta Shalwar", "Men's Casual Shirt", "Men's Polo Shirt", "Men's Jeans", "Men's Trousers"],
    need.recipient {{"relation": "spouse", "gender": "male", "age": null}}, remember ["Spouse is male (husband)"],
    reply "".
-5. You showed running shoes. NEW "what about Nike?" -> "refine", "search", "product", query "Nike Running Shoes".
+5. You showed running shoes. NEW "what about Nike?" -> "refine", "search", "product", query "Nike Running Shoes",
+   need.attributes.brand "Nike", need.category "Shoes".
+5b. NEW "loreal ki lipstick dikhao" -> language "Roman Urdu", "new", "search", "product", query "L'Oreal Lipstick",
+   need.attributes.brand "L'Oreal", need.category "Lipsticks".
 6. You showed Nike running shoes. NEW "for women, under 8000" -> "refine", "search", "product",
    query "Women's Nike Running Shoes", need.budget {{"min": null, "max": 8000}}.
 7. You showed a gift list. NEW "show more" -> "more", "search", "list", items = other gift types not already searched.
@@ -368,6 +432,15 @@ def _parse(raw: dict) -> Turn:
             query = "" if kind == "list" else items[0]
         if kind == "product":
             items = []
+
+    # ITEM_SYNONYMS apply to a single-product search too; a replacement that
+    # lists several products turns it into a list search.
+    if kind == "product" and query:
+        mapped = apply_query_synonyms(query)
+        if len(mapped) >= 2:
+            kind, query, items = "list", "", mapped
+        elif mapped:
+            query = mapped[0]
 
     if action not in ACTIONS:
         action = "search" if (query or items) else "answer"

@@ -22,7 +22,7 @@ import uuid
 
 from config.memory import HISTORY_MESSAGES
 from config.shopping import VECTOR_DISTANCE_THRESHOLD
-from domains.shopping import conversation, query_engine, reply, repository, search
+from domains.shopping import conversation, facets, query_engine, reply, repository, search
 from services import memory_service
 
 NO_MATCH_REPLY = (
@@ -119,6 +119,17 @@ def _budget_filter(need: dict) -> dict | None:
     return {"min": lo, "max": hi} if (lo is not None or hi is not None) else None
 
 
+def _facet_filter(need: dict, kind: str) -> dict:
+    """Exact catalog manufacturer/category values for the brand and category
+    in the need. The category describes ONE product type, so it is only used
+    for a single-product search — across a list (gifts, groceries) it would
+    filter out every other item's products."""
+    attributes = need.get("attributes") if isinstance(need.get("attributes"), dict) else {}
+    brand = str(attributes.get("brand") or "").strip() or None
+    category = str(need.get("category") or "").strip() or None
+    return facets.resolve(brand=brand, category=category if kind == "product" else None)
+
+
 def _search_turn(sid, user_msg, turn, state, history, tracking_conv_id) -> dict:
     need = dict(turn.need or {})
 
@@ -174,6 +185,7 @@ def _search_turn(sid, user_msg, turn, state, history, tracking_conv_id) -> dict:
             conversation_id=None,
             price_filter=price_filter,
             cheapest_first=need["prefer_cheaper"],
+            facet_filter=_facet_filter(need, turn.kind),
         )
     except Exception as e:
         return _result(
@@ -214,17 +226,33 @@ def _search_turn(sid, user_msg, turn, state, history, tracking_conv_id) -> dict:
     return _result(answer, products, None, new_conv_id)
 
 
+def _brand_not_found(need: dict, hits: list) -> str | None:
+    """The brand the customer asked for, when it was searched but none of the
+    shown products could be filtered to it — so the reply says so instead
+    of passing other brands off as it. Unknown (None) when the brand filter
+    is switched off."""
+    attributes = need.get("attributes") if isinstance(need.get("attributes"), dict) else {}
+    brand = str(attributes.get("brand") or "").strip()
+    if not brand or not hits or facets.MANUFACTURER_FIELD not in facets.ENABLED_FIELDS:
+        return None
+    if any(facets.MANUFACTURER_FIELD in (h.get(search.FILTERED_KEY) or []) for h in hits):
+        return None
+    return brand
+
+
 def _reply_for_results(
     user_msg, language, need, turn_type, searched, hits, history
 ) -> tuple[str, list]:
     """The reply, written once we know exactly what will be displayed, plus
     the products to display (minus any the reply step judged to be the wrong
-    product type). Falls back to a template reply if that LLM call fails."""
+    product type), each with a short display name. Falls back to a template
+    reply if that LLM call fails."""
     products = _hits_to_products(hits)
     matched = [list(h.get(search.MATCHED_ITEM) or []) for h in hits]
     try:
         composed = reply.compose(
-            user_msg, language, need, turn_type, searched, products, matched, history
+            user_msg, language, need, turn_type, searched, products, matched, history,
+            brand_not_found=_brand_not_found(need, hits),
         )
     except Exception as e:
         print(f"[shopping] reply composition failed, using template reply: {e}")
@@ -232,6 +260,8 @@ def _reply_for_results(
             query_engine.build_multi_item_answer(hits) if hits else NO_MATCH_REPLY
         ), products
 
+    for i, name in composed.short_names.items():
+        products[i]["display_name"] = name
     products = [p for i, p in enumerate(products) if i not in composed.drop]
     answer = composed.reply or (
         query_engine.build_multi_item_answer(products) if products else NO_MATCH_REPLY
@@ -261,15 +291,16 @@ def _hits_to_products(hits: list) -> list:
         if isinstance(raw_img, list):
             raw_img = raw_img[0] if raw_img else ""
 
+        name = str(doc.get("name", doc.get("product_name", doc.get("title", "Unknown"))))
         products.append(
             {
                 "product_id": str(doc.get("id", doc.get("product_id", ""))),
                 "sku": str(doc.get("sku", "") or ""),
-                "product_name": str(
-                    doc.get(
-                        "name", doc.get("product_name", doc.get("title", "Unknown"))
-                    )
-                ),
+                # Full catalog name: what the cart and orders record.
+                "product_name": name,
+                # What the card shows — replaced by the reply step's short
+                # name when it gives one (see reply.compose).
+                "display_name": reply.shorten_name(name),
                 "price": repository.to_json_safe(
                     doc.get("price", doc.get("final_price", 0))
                 ),

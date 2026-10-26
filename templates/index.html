@@ -932,9 +932,9 @@
         card.innerHTML = `
           ${imgHtml}
           <div class="product-info">
-            <div class="product-name" title="${escapeAttr(p.product_name)}">${escapeHtml(p.product_name)}</div>
+            <div class="product-name" title="${escapeAttr(p.product_name)}">${escapeHtml(p.display_name || p.product_name)}</div>
             ${p.price ? `<div class="product-price">Rs. ${Number(p.price).toLocaleString('en-PK', {minimumFractionDigits:2})}</div>` : ''}
-            ${p.category ? `<div class="product-cat">${escapeHtml(p.category).replace(/&#39;/g, "'")}</div>` : ''}
+            ${p.category ? `<div class="product-cat">${escapeHtml(p.category.split(', ')[0]).replace(/&#39;/g, "'")}</div>` : ''}
           </div>
           <button class="add-btn" onclick='quickAddToCart(${JSON.stringify(p)})'>+ Add</button>
         `;

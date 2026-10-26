@@ -20,6 +20,12 @@ query resolves to:
 Price constraints ("under 2500") are applied as a Typesense filter_by on the
 plain numeric PRICE_FIELD, never through the embedding — see
 price_filter_to_filter_by().
+
+A brand / category the customer asked for is applied as a filter_by on the
+manufacturer / category fields (resolved to exact catalog values by
+facets.py). Each filtered search runs next to looser versions of itself
+(brand only, then no filter) and falls back to them when the filter finds
+nothing relevant — a misread brand or category must never empty the results.
 """
 
 from urllib.parse import urlencode
@@ -39,6 +45,7 @@ from config.shopping import (
     VECTOR_DISTANCE_THRESHOLD,
     openai_client,
 )
+from domains.shopping import facets
 
 MULTI_ITEM_THRESHOLD = 2
 MAX_EXPANSION_ITEMS = 8  # cap sub-searches so we don't blow up multi_search payloads
@@ -51,6 +58,10 @@ MIN_HITS_PER_ITEM = 1
 # product can match several), so the caller can tell which items came back
 # empty (see reply.py).
 MATCHED_ITEM = "_matched_item"
+# Key added to every returned hit: the facet fields ("manufacturer",
+# "category") its search was filtered by — [] when unfiltered, or when the
+# filter found nothing and the search fell back.
+FILTERED_KEY = "_facet_filtered"
 
 # Cheapest-first (budget requests): fetch this many times more candidates
 # than will be shown, keep only the ones about as relevant as the best match
@@ -199,6 +210,37 @@ def _product_search(vector: list[float], k: int, filter_by: str | None) -> dict:
     return search
 
 
+def _join_filters(*clauses: str | None) -> str | None:
+    clauses = [c for c in clauses if c]
+    return " && ".join(f"({c})" for c in clauses) if clauses else None
+
+
+def _relevant(hits: list) -> list:
+    return [h for h in hits if h.get("vector_distance", 0) <= VECTOR_DISTANCE_THRESHOLD]
+
+
+def _search_items(vectors: list, k: int, price_filter_by: str | None, facet_chain: list[dict]):
+    """One multi_search for all items. facet_chain lists facet filters from
+    most to least specific (see facets.filter_chain); every item is searched
+    with each of them and without any, and keeps the first that returns a
+    relevant hit. Returns (per-item hits, per-item facet fields applied)."""
+    levels = [*facet_chain, {}]
+    searches = [
+        _product_search(v, k, _join_filters(price_filter_by, facets.to_filter_by(level)))
+        for v in vectors
+        for level in levels
+    ]
+    results = _typesense_multi_search({"searches": searches}, {}, None).get("results", [])
+
+    per_item, applied = [], []
+    for i in range(len(vectors)):
+        item_results = [r.get("hits", []) for r in results[i * len(levels) : (i + 1) * len(levels)]]
+        pick = next((j for j, h in enumerate(item_results[:-1]) if _relevant(h)), len(levels) - 1)
+        per_item.append(item_results[pick])
+        applied.append(sorted(levels[pick]))
+    return per_item, applied
+
+
 def _price_of(hit) -> float:
     try:
         return float(hit.get("document", {}).get(PRICE_FIELD) or 0)
@@ -223,6 +265,7 @@ def typesense_search_products(
     conversation_id: str | None = None,
     price_filter: dict | None = None,
     cheapest_first: bool = False,
+    facet_filter: dict | None = None,
 ):
     """Product retrieval, given an already-expanded/classified query (see
     query_engine.analyze_query).
@@ -230,6 +273,11 @@ def typesense_search_products(
     cheapest_first (budget requests) returns, per item, the cheapest of the
     closely relevant matches instead of the closest ones — see
     _cheapest_relevant().
+
+    facet_filter ({"manufacturer": [...], "category": [...]}, exact catalog
+    values from facets.resolve) narrows every item, falling back per item to
+    a looser search when it finds nothing relevant. FILTERED_KEY on each hit
+    lists the facet fields that were actually applied to it.
 
     Returns (hits, conversation_result). conversation_result is
     {"answer": str, "conversation_id": str} for the single-item path, or
@@ -242,9 +290,33 @@ def typesense_search_products(
     filter_by = price_filter_to_filter_by(price_filter)
     if filter_by:
         print("-----price filter_by: ", filter_by)
+    facet_chain = facets.filter_chain(facet_filter or {})
+    if facet_chain:
+        print("-----facet filters (most specific first): ", [facets.to_filter_by(f) for f in facet_chain])
 
     items = [i.strip() for i in expanded_query.split(",") if i.strip()]
     is_multi_item = len(items) >= MULTI_ITEM_THRESHOLD
+
+    if not is_multi_item and facet_chain:
+        # Plain search (no Typesense conversation): the filtered and
+        # fallback searches go out together, which conversation mode's
+        # single-search request can't do. Its generated answer is unused.
+        k = (
+            TOTAL_HIT_BUDGET * CHEAPEST_CANDIDATE_MULTIPLIER
+            if cheapest_first
+            else TOTAL_HIT_BUDGET
+        )
+        (hits,), (used,) = _search_items(
+            [embed_query_text(expanded_query)], k, filter_by, facet_chain
+        )
+        print(f"-----item {expanded_query!r}: facet fields applied {used}")
+        if cheapest_first:
+            hits = _cheapest_relevant(hits, TOTAL_HIT_BUDGET)
+        hits = hits[:TOTAL_HIT_BUDGET]
+        for hit in hits:
+            hit[MATCHED_ITEM] = [expanded_query]
+            hit[FILTERED_KEY] = used
+        return hits, {"answer": "", "conversation_id": conversation_id}
 
     if not is_multi_item:
         params = {
@@ -273,6 +345,7 @@ def typesense_search_products(
             hits = _cheapest_relevant(hits, TOTAL_HIT_BUDGET)
         for hit in hits:
             hit[MATCHED_ITEM] = [expanded_query]
+            hit[FILTERED_KEY] = []
 
         conv = data.get("conversation", {})
         conversation_result = {
@@ -294,17 +367,15 @@ def typesense_search_products(
         if cheapest_first
         else per_item
     )
-    results = _typesense_multi_search(
-        {"searches": [_product_search(v, fetch_k, filter_by) for v in vectors]},
-        {},
-        None,
-    ).get("results", [])
-    per_item_hits = [r.get("hits", []) for r in results]
+    per_item_hits, used = _search_items(vectors, fetch_k, filter_by, facet_chain)
+    if facet_chain:
+        print(f"-----facet fields applied per item: {dict(zip(items, used))}")
     if cheapest_first:
         per_item_hits = [_cheapest_relevant(h, per_item) for h in per_item_hits]
-    for item, item_hits in zip(items, per_item_hits):
+    for item, item_hits, item_used in zip(items, per_item_hits, used):
         for hit in item_hits:
             hit[MATCHED_ITEM] = [item]
+            hit[FILTERED_KEY] = item_used
 
     hits = []
     kept_by_id = {}

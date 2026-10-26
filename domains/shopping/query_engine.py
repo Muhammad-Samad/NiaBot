@@ -197,13 +197,13 @@ _LIST_RULES = """
 
   Examples:
   - "suggest me some gym products" / "gym related products" / "gym" -> ["Whey Protein", "Weight Lifting Belt", "Workout Gloves", "Yoga Mat", "Resistance Bands", "Shaker Bottle", "Sports Towel", "Duffel Bag"]
+  - "ration" / grocery /            -> ['Rice Basmati', 'Wheat Flour', 'Cooking Oil', 'Sugar', 'Tea', 'Salt', 'Naheed Daal', 'Desi Ghee']
   - "baby products"                 -> ["Diapers", "Baby Wipes", "Feeding Bottle", "Baby Lotion", "Baby Shampoo", "Baby Cereal", "Pacifier", "Baby Powder"]
   - "kitchen items"                 -> ["Non Stick Pan", "Pressure Cooker", "Knife Set", "Cutting Board", "Storage Containers", "Spatula", "Dinner Set"]
   - "Vegetables" / "Different Vegetables" -> ["Tomato Red", "Potato (Aloo)", "Peas (Mutter)", "Carrot (Gajar)", "Lemon (Leemun)", "Onion (Pyaaz)", "Garlic (lehsan)", "Ginger (Adrak)"]
   - "camping"                       -> ["Tent", "Sleeping Bag", "Torch", "Water Bottle", "Portable Stove", "Insect Repellent", "Cooler Box"]
   - "different pulses" / "pulses"   -> ["Naheed Daal Channa", "Naheed Daal Mong","Naheed Daal Mash", "Naheed Daal Masoor", "Naheed Daal Kala Masoor", "Naheed Daal Arhar", "Naheed Daal Mong Chilka"]
   - "beef biryani ka saman la do"   -> ["Beef Meat", "Basmati Rice", "Yogurt", "Onion (Pyaaz)", "Tomato (Tamatar)", "Biryani Masala", "Ginger Garlic Paste", "Green Chilli"]
-  - "bachi ke liye water gun, color, chashmay" -> ["Water Gun Toy", "Color Pencils", "Crayons", "Kids Sunglasses"]
   - "Chicken Biryani Ingredients"   -> ["Chicken meat", "Basmati Rice", "Yogurt", "Onion (Pyaaz)", "Tomato (Tamatar)", "Ginger Powder", "Garlic (Lehsan)", "Green Chilli", "Coriander (Dhania) leaves"]
   - "breakfast"                     -> ["Paratha", "Farm Eggs", "Bread", "Dairy Butter", "Honey", "Jam", "Oatmeal", "Tea", "Juice"]
   - "dairy products"                -> ['Milk', 'Yogurt','Farm Eggs', 'Butter', 'Shredded Cheese', 'Cream', 'Paneer', 'Desi Ghee']
@@ -307,10 +307,12 @@ def is_followup_fragment(user_msg: str) -> bool:
     return any(p.fullmatch(msg) for p in _FOLLOWUP_PATTERNS)
 
 
-# Generic list items that pull in off-category products (e.g. "Cheese" also
-# matches "Kurkure Cheese Puff Balls") are swapped for a more specific search
-# term. Keys are lowercase and matched against the WHOLE item, so "Cheddar
-# Cheese" or "Chicken meat" are left alone. Add new entries here.
+# Generic product names that pull in off-category products (e.g. "Cheese"
+# also matches "Kurkure Cheese Puff Balls") are swapped for a more specific
+# search term — in a list AND in a single-product search. Keys are matched
+# against the WHOLE item, ignoring case and extra spaces, so "Cheddar Cheese"
+# or "Chicken meat" are left alone. A comma-separated value ("fish fingers,
+# fish snacks") is searched as separate items. Add new entries here.
 ITEM_SYNONYMS = {
     "chicken": "Chicken meat",
     "egg": "Farm Eggs",
@@ -318,16 +320,58 @@ ITEM_SYNONYMS = {
     "cheese": "Shredded Cheese",
     "pulses": "Naheed Daal",
     "fish": "fish fingers, fish snacks",
+    "sandals": "Formal Sandals, Casual Sandal",
+    "Men Casual Shirts": "Basix Men's Casual Shirt",
+    "Lentils": "Naheed Daal",
+    "Cardamom": "Naheed Choti Elaichi, Naheed badi Elaichi",
 }
 
 
+def _synonym_prompt_rules() -> str:
+    """ITEM_SYNONYMS as prompt text, so the LLM writes the store's own names
+    itself (also inside lists and context-built queries), instead of relying
+    only on the exact whole-item swap below."""
+    lines = []
+    for generic, specific in ITEM_SYNONYMS.items():
+        parts = [p.strip() for p in specific.split(",") if p.strip()]
+        target = f'query "{parts[0]}"' if len(parts) == 1 else "kind \"list\", items " + json.dumps(parts)
+        lines.append(f'  - "{generic}" -> {target}')
+    return (
+        "\n  STORE NAMES (mandatory): when the customer asks for one of these generic products, search with the store's\n"
+        "  own product names below instead of the generic word (in a list too, put these names in its place). A more\n"
+        "  specific request keeps its own words (\"Cheddar Cheese\", \"Chicken Nuggets\", \"Cardamom Powder\").\n"
+        "  \"Naheed\" is the store's own brand — never search for the word \"Naheed\" alone.\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+
+
+SYNONYM_RULES = _synonym_prompt_rules()
+_SYSTEM_PROMPT += SYNONYM_RULES
+_LIST_PROMPT += SYNONYM_RULES
+
+
+def _synonym_key(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text)).strip(" .,!?").lower()
+
+
 def _apply_item_synonyms(items: list[str]) -> list[str]:
+    synonyms = {_synonym_key(k): v for k, v in ITEM_SYNONYMS.items()}
     mapped = []
     for item in items:
-        item = ITEM_SYNONYMS.get(item.lower(), item)
-        if item.lower() not in (m.lower() for m in mapped):
-            mapped.append(item)
+        replacement = synonyms.get(_synonym_key(item.lower()))
+        parts = [p.strip() for p in replacement.split(",")] if replacement else [item]
+        for part in parts:
+            if part and part.lower() not in (m.lower() for m in mapped):
+                mapped.append(part)
     return mapped
+
+
+def apply_query_synonyms(query: str) -> list[str]:
+    """A single-product search phrase after ITEM_SYNONYMS: [query] unchanged,
+    [replacement], or several items when the replacement lists more than one
+    (the caller then searches them as a list)."""
+    return _apply_item_synonyms([query]) if query.strip() else []
 
 
 def _clean_items(raw) -> list[str]:
@@ -412,6 +456,8 @@ def analyze_query(user_msg: str):
             items = _expand_to_list(user_msg)
         if len(items) >= MIN_LIST_ITEMS:
             query = ", ".join(items)
+    elif not off_topic and not is_followup:
+        query = ", ".join(apply_query_synonyms(query)) or query
 
     print(
         f"[analyze_query] off_topic={off_topic} kind={kind!r} query={query!r} is_followup={is_followup}"

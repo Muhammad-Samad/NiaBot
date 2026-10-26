@@ -12,13 +12,15 @@ from openai import OpenAI
 load_dotenv()
 
 # ─── Typesense ────────────────────────────────────────────────────────────────
-TYPESENSE_HOST     = os.getenv("TYPESENSE_HOST", "localhost")
-TYPESENSE_PORT     = int(os.getenv("TYPESENSE_PORT", 8108))
+TYPESENSE_HOST = os.getenv("TYPESENSE_HOST", "localhost")
+TYPESENSE_PORT = int(os.getenv("TYPESENSE_PORT", 8108))
 TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "http")
-TYPESENSE_API_KEY  = os.getenv("TYPESENSE_API_KEY")
+TYPESENSE_API_KEY = os.getenv("TYPESENSE_API_KEY")
 
-PRODUCTS_COLLECTION = os.getenv("TYPESENSE_PRODUCTS_COLLECTION", "magento_v1_default-products")
-CONV_MODEL_ID        = os.getenv("TYPESENSE_CONV_MODEL_ID", "naheed-shopping-model")
+PRODUCTS_COLLECTION = os.getenv(
+    "TYPESENSE_PRODUCTS_COLLECTION", "magento_v1_default-products"
+)
+CONV_MODEL_ID = os.getenv("TYPESENSE_CONV_MODEL_ID", "naheed-shopping-model")
 
 # Must match the "embedding" field's model_config.model_name / num_dim on
 # PRODUCTS_COLLECTION exactly (openai/text-embedding-3-small, 1536 dims) — see
@@ -38,19 +40,33 @@ PRICE_FIELD = os.getenv("PRICE_FIELD", "price")
 
 VECTOR_DISTANCE_THRESHOLD = float(os.getenv("VECTOR_DISTANCE_THRESHOLD", "0.1"))
 
+# Narrow product search by the brand (manufacturer field) / category (category
+# field) the customer asked for — see domains/shopping/facets.py. Set to
+# "false" to search without that filter.
+FILTER_BY_MANUFACTURER = (
+    os.getenv("SHOPPING_FILTER_BY_MANUFACTURER", "true").strip().lower() == "true"
+)
+FILTER_BY_CATEGORY = (
+    os.getenv("SHOPPING_FILTER_BY_CATEGORY", "true").strip().lower() == "true"
+)
+
 # ─── LLM (shopping's own query understanding / off-topic guard) ──────────────
 LLM_API_KEY = os.getenv("SHOPPING_LLM_API_KEY")
-LLM_MODEL   = os.getenv("SHOPPING_LLM_MODEL")
+LLM_MODEL = os.getenv("SHOPPING_LLM_MODEL")
 
 # ─── Clients ──────────────────────────────────────────────────────────────────
-ts_client = typesense.Client({
-    "nodes": [{
-        "host":     TYPESENSE_HOST,
-        "port":     str(TYPESENSE_PORT),
-        "protocol": TYPESENSE_PROTOCOL,
-    }],
-    "api_key":                    TYPESENSE_API_KEY,
-    "connection_timeout_seconds": 30,
-})
+ts_client = typesense.Client(
+    {
+        "nodes": [
+            {
+                "host": TYPESENSE_HOST,
+                "port": str(TYPESENSE_PORT),
+                "protocol": TYPESENSE_PROTOCOL,
+            }
+        ],
+        "api_key": TYPESENSE_API_KEY,
+        "connection_timeout_seconds": 30,
+    }
+)
 
 openai_client = OpenAI(api_key=LLM_API_KEY)
