@@ -17,7 +17,7 @@ TYPESENSE_PORT     = int(os.getenv("TYPESENSE_PORT", 8108))
 TYPESENSE_PROTOCOL = os.getenv("TYPESENSE_PROTOCOL", "http")
 TYPESENSE_API_KEY  = os.getenv("TYPESENSE_API_KEY")
 LLM_API_KEY       = os.getenv("SHOPPING_LLM_API_KEY")
-LLM_MODEL         = os.getenv("SHOPPING_LLM_MODEL", "gpt-3.5-turbo")
+LLM_MODEL         = os.getenv("SHOPPING_LLM_MODEL", "gpt-4.1-mini")
 
 
 
