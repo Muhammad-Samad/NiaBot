@@ -38,6 +38,9 @@ Routing rule, checked in order:
      LLM-based IntentParser does the real, nuanced classification. If that
      parser still says `general_policy`, operations hands the message to the
      policy domain itself (its `policy_rag` tool).
+     Once the customer has verified an order in this session, follow-ups
+     about it that don't say "order" ("isy cancel kardo", "iska status?")
+     go to operations too, which acts on that remembered order.
   5. Anything else — the default — goes to the shopping domain (product
      search). When shopping's off-topic guard rejects the message, the
      policy domain answers it instead: it covers store/policy questions the
@@ -75,6 +78,9 @@ _OPERATIONS_PATTERNS = [
     r"status.*order",
     r"order.*status",
     r"\b(my|mera|meri|mere)\s+(order|parcel)\b",
+    r"\b(mujhe|mujhy|mujy|mujhay|mjhe|mjhy|mujhko|humein|hamein|hume|hamara|humara|hamari|humari|apna|apni)\s+(order|parcel)\b",
+    r"\b(order|parcel)\b.*\b(kahan|kahaan|kidhar|kidr|kab|kb|nahi\s+mila|nai\s+mila|nahi\s+aya|nai\s+aya|nahi\s+aaya|abhi\s+tak|status)\b",
+    r"\b(kahan|kahaan|kidhar|kidr|kab|kb)\b.*\b(order|parcel)\b",
     r"\bwhen\b.*\border\b.*\bdeliver",
     r"modify.*order",
     r"change.*order",
@@ -83,6 +89,8 @@ _OPERATIONS_PATTERNS = [
     r"remove.*item.*order",
     r"cancel.*order",
     r"order.*cancel",
+    r"\bcancel\s*(it|this|that|kar|kr|karo|kro|kardo|krdo|kardain|kardein|krdein|karna|krna|karni|krni)\b",
+    r"\b(isy|isay|isey|ise|isse|isko|ye|yeh|usy|usay|usko)\s+(ko\s+)?cancel\b",
     r"\brefund\b",
     r"return.*(item|product|order)",
     r"\bcomplain(t)?\b",
@@ -115,6 +123,22 @@ _IDENTITY_PATTERNS = [
     r"\bniabot\b",
     r"^\s*nia\s*[?!.]*\s*$",
 ]
+
+
+# Follow-ups about an order the customer already verified this session, which
+# don't say "order" ("iska status?", "ye kab aayega", "cancel kardo").
+_VERIFIED_ORDER_FOLLOWUP_PATTERNS = [
+    r"\bcancel",
+    r"\b(status|track|tracking|deliver(y|ed)?|dispatch(ed)?|shipped|rider|courier|parcel)\b",
+    r"\b(kab|kahan|kidhar|kidr)\b.*\b(aa?ye?ga|aa?ye?gi|milega|milegi|pohanch|pohnch|pahunch|hai)\b",
+    r"\b(aa?ye?ga|aa?ye?gi|milega|milegi)\b",
+    r"\b(refund|return|replace|exchange|modify|change|complain(t)?)\b",
+    r"\b(iska|uska|iski|uski|iske|uske|isy|isay|usy|usay|isko|usko)\b",
+]
+
+
+def _is_verified_order_followup(message: str) -> bool:
+    return any(re.search(p, message, re.IGNORECASE) for p in _VERIFIED_ORDER_FOLLOWUP_PATTERNS)
 
 
 def _asks_about_bot(message: str) -> bool:
@@ -356,6 +380,12 @@ def route_message(
             _operations_result(sid, message, conversation_id),
             sid,
             "operational_pattern",
+        )
+    if operations_service.has_verified_order(sid) and _is_verified_order_followup(message):
+        return _routed(
+            _operations_result(sid, message, conversation_id),
+            sid,
+            "verified_order_followup",
         )
 
     result = shopping_service.handle_message(

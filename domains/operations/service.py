@@ -20,6 +20,13 @@ def is_mid_flow(session_id: str) -> bool:
     return bool(state.current_flow)
 
 
+def has_verified_order(session_id: str) -> bool:
+    """True once the customer has verified an order (ID + phone) in this
+    session - follow-ups like "isy cancel kardo" then refer to that order."""
+    state = _conversation_manager.state_manager.get_state(session_id)
+    return bool(state.verified_order_id)
+
+
 def get_resume_context(session_id: str):
     """Returns (current_flow, last_assistant_message) so a turn answered by
     another domain mid-flow (a policy question) can remind the customer

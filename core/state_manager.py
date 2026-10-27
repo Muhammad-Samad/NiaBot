@@ -1,3 +1,4 @@
+import re
 import time
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
@@ -31,6 +32,17 @@ class ConversationState(BaseModel):
     # awaiting a numbered reply, "policy" while the Policy/FAQ sub-menu is.
     # None once the customer has picked an option or typed free text.
     awaiting_menu: Optional[str] = None
+
+    # The language the customer is talking in ("english", "roman_urdu",
+    # "urdu"), set by ai/response_composer.py. Survives clear_state so the
+    # whole session stays in it, not just the current flow.
+    language: Optional[str] = None
+
+    # The order the customer has already verified (order ID + phone) in this
+    # session. Survives clear_state, so every later flow (track, cancel,
+    # modify, complaint...) works on it without asking for the order ID and
+    # phone number again - until the customer names a different order.
+    verified_order_id: Optional[str] = None
 
 class StateManager:
     def __init__(self, timeout_seconds: int = 300):
@@ -89,15 +101,26 @@ class StateManager:
                 state.entities[k] = v
         state.timestamp = time.time()
         
-    def check_cancellation(self, message: str) -> bool:
-        """Checks if the user wants to cancel the current workflow."""
-        import re
+    # "isy cancel kardo", "ye cancel karo", "cancel it" - a request to cancel
+    # something (the order being discussed), not to reset the chat.
+    _CANCEL_REQUEST_RE = re.compile(
+        r"\b(?:isy|isay|isey|ise|isse|is|isko|iss|ye|yeh|usy|usay|use|usse|usko|us|wo|woh)\s+(?:ko\s+)?cancel\b"
+        r"|\bcancel\s*(?:it|this|that|kar|kr|karo|kro|kardo|krdo|kardain|kardein|krdein|karden|krden|karna|krna|karni|krni|hojaye|ho\s+jaye)\b"
+    )
+
+    def check_cancellation(self, message: str, order_context: bool = False) -> bool:
+        """Checks if the user wants to cancel the current workflow.
+        `order_context` is True when no flow is active or the customer has a
+        verified order in this session - then "isy cancel kardo" / "cancel it"
+        means cancelling that order, not resetting the conversation."""
         msg_lower = message.lower().strip()
-        
+
         # Ignore if context is about cancelling an order (business request) rather than chatbot flow
         if re.search(r'\bcancel\s+(?:my\s+|the\s+|this\s+|whole\s+|our\s+)*order\b', msg_lower):
             return False
         if re.search(r'\border\s+(?:cancellation|cancel)\b', msg_lower):
+            return False
+        if order_context and self._CANCEL_REQUEST_RE.search(msg_lower):
             return False
             
         # Ignore if both "order" and "cancel" appear anywhere in the sentence (Roman Urdu/multilingual fallback)
@@ -121,4 +144,7 @@ class StateManager:
     def clear_state(self, session_id: str = "default"):
         """Resets the conversation to a clean slate."""
         if session_id in self.sessions:
-            self.sessions[session_id] = ConversationState()
+            old = self.sessions[session_id]
+            self.sessions[session_id] = ConversationState(
+                language=old.language, verified_order_id=old.verified_order_id
+            )

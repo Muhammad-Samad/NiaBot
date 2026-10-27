@@ -7,6 +7,7 @@ from core.state_manager import StateManager
 from core.flow_manager import FlowManager
 from ai.intent_parser import IntentParser, IntentParserError
 from ai.schemas import IntentResult as SchemaIntentResult
+from ai.response_composer import compose as compose_response
 from services.order_service import OrderService
 from services.complaint_service import ComplaintService
 from services.complaint_tracking_service import ComplaintTrackingService
@@ -51,14 +52,25 @@ class ConversationManager:
     # number (e.g. "0300 1234567", "+92-300-1234567").
     _BARE_ORDER_ID_RE = re.compile(r"^#?\s*([A-Za-z0-9][A-Za-z0-9_\-]*)$")
     _BARE_PHONE_RE = re.compile(r"^\+?[\d\s\-()]+$")
+    _PAKISTANI_PHONE_RE = re.compile(r"^(\+?92|0)3\d{9}$")
 
     def _order_tracking_fast_path(self, message: str, state) -> Optional[Tuple[str, Dict[str, Any]]]:
         """When order tracking is waiting for an order ID or phone number and the
         message is exactly that, the intent is already known - return it so the
-        LLM round trip can be skipped. Returns None otherwise."""
+        LLM round trip can be skipped. A bare order ID sent with no flow active
+        (e.g. answering another domain's "share your order ID") starts order
+        tracking. Returns None otherwise."""
+        text = message.strip()
+
+        if not state.current_flow:
+            match = self._BARE_ORDER_ID_RE.match(text)
+            if match and sum(ch.isdigit() for ch in match.group(1)) >= 5 \
+                    and not self._PAKISTANI_PHONE_RE.match(re.sub(r"[\s\-()]", "", text)):
+                return "order_tracking", {"order_id": match.group(1)}
+            return None
+
         if state.current_flow != "order_tracking":
             return None
-        text = message.strip()
 
         if state.current_stage == "ask_order_id":
             match = self._BARE_ORDER_ID_RE.match(text)
@@ -68,6 +80,36 @@ class ConversationManager:
             if self._BARE_PHONE_RE.match(text) and 10 <= sum(ch.isdigit() for ch in text) <= 13:
                 return "order_tracking", {}
         return None
+
+    # Intents that act on a specific order, and so can reuse the order the
+    # customer already verified in this session.
+    _ORDER_INTENTS = {"order_tracking", "cancel_order", "modify_order", "complaint", "complaint_tracking", "refund", "special_request"}
+
+    @staticmethod
+    def _normalize_order_id(order_id) -> str:
+        return str(order_id).strip().lstrip("#").strip()
+
+    def _apply_verified_order(self, state, intent_result) -> None:
+        """Carries the order verified earlier in this session into a newly
+        started order flow (pre-filled order ID, already verified), so the
+        customer isn't asked for the order ID and phone number again. Naming a
+        different order forgets it, and that order goes through verification."""
+        if not state.verified_order_id or state.current_flow:
+            return
+        if intent_result.intent not in self._ORDER_INTENTS:
+            return
+
+        entities = intent_result.entities if isinstance(intent_result.entities, dict) else intent_result.entities.model_dump()
+        mentioned = entities.get("order_id") or entities.get("order_no")
+        if mentioned and self._normalize_order_id(mentioned) != state.verified_order_id:
+            logger.debug(f"Customer moved to order {mentioned}; forgetting verified order {state.verified_order_id}")
+            state.verified_order_id = None
+            state.customer_verified = False
+            return
+
+        state.entities["order_id"] = state.verified_order_id
+        state.customer_verified = True
+        logger.debug(f"Reusing verified order {state.verified_order_id} for intent {intent_result.intent}")
 
     def process_message_with_debug(self, message: str, session_id: str = "default", forced_intent: str = None, forced_entities: dict = None) -> Tuple[str, Dict[str, Any]]:
         message_id = str(uuid.uuid4())
@@ -131,7 +173,9 @@ class ConversationManager:
             return response_text, {}
             
         # 0.1 Check Cancellation of the current workflow
-        if self.state_manager.check_cancellation(message):
+        state = self.state_manager.get_state(session_id)
+        order_context = not state.current_flow or bool(state.verified_order_id)
+        if self.state_manager.check_cancellation(message, order_context=order_context):
             self.state_manager.clear_state(session_id)
             response_text = "Conversation reset. How can I help you?"
             self.conversation_service.save_user_message(session_id, message, intent="cancel")
@@ -155,6 +199,7 @@ class ConversationManager:
             return response_text, {}
             
         # 0.5 Load State & add user message
+        previous_bot_message = state.last_assistant_message
         self.state_manager.add_message(session_id, "user", message)
         state = self.state_manager.get_state(session_id)
         
@@ -244,7 +289,9 @@ class ConversationManager:
             logger.debug(f"Judged customer priority={priority}, mood={mood} (message_id={message_id})")
 
         state = self.state_manager.get_state(session_id)
-        
+        if intent_result:
+            self._apply_verified_order(state, intent_result)
+
         # 1.8 Evaluate Escalation Rules
         if intent_result.intent == "unknown":
             state.consecutive_unknown_count += 1
@@ -279,7 +326,15 @@ class ConversationManager:
                 state.consecutive_failure_count = 0
             else:
                 raise
-        
+
+        # Remember an order the customer just verified, before a completed
+        # flow's clear_state wipes the flow's own entities.
+        # The complaint flow swaps in the latest re-shipped order ID and keeps
+        # the one the customer typed as parent_order_id - remember that one.
+        if state.customer_verified and state.entities.get("order_id"):
+            remembered = state.entities.get("parent_order_id") or state.entities["order_id"]
+            state.verified_order_id = self._normalize_order_id(remembered)
+
         # 3. Apply state updates
         if flow_response.status == "completed":
             self.state_manager.clear_state(session_id)
@@ -370,6 +425,19 @@ class ConversationManager:
             reassurance += "\n\n"
         if reassurance and isinstance(reassurance, str):
             response_text = f"{reassurance}{response_text}"
+
+        # 4. Say it like a human agent, in the customer's language. Policy
+        # answers are already written that way by the policy domain.
+        if flow_response.tool_request != "policy_rag":
+            state = self.state_manager.get_state(session_id)
+            response_text, language = compose_response(
+                response_text,
+                user_message=message,
+                previous_language=state.language,
+                previous_bot_message=previous_bot_message,
+                context=f"intent={intent_result.intent if intent_result else 'unknown'}, tool={flow_response.tool_request}",
+            )
+            state.language = language
 
         self.state_manager.add_message(session_id, "assistant", response_text)
 

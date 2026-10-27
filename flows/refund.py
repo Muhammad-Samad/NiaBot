@@ -6,10 +6,25 @@ from core.state_manager import ConversationState
 from database.repository import OrderRepository
 
 class RefundFlow(BaseFlow):
+    # Refunds/returns are not processed by the bot yet; customers are redirected to CSR.
+    # Flip to True to re-enable the automated refund flow below.
+    REFUND_PROCESSING_ENABLED = False
+
+    CSR_REDIRECT_RESPONSE = (
+        "Refund and return requests are currently handled by our Customer Support team. "
+        "Please contact them at (021) 111-624-333 and they will be happy to assist you."
+    )
+
     def __init__(self, order_repository=None):
         self.order_repository = order_repository or OrderRepository()
 
     def handle(self, intent_result: IntentResult, state: ConversationState) -> FlowResponse:
+        if not self.REFUND_PROCESSING_ENABLED:
+            return FlowResponse(
+                status="completed",
+                response=self.CSR_REDIRECT_RESPONSE
+            )
+
         user_msg = ""
         if state.conversation_history:
             user_msg = state.conversation_history[-1]["content"].strip()
@@ -71,6 +86,8 @@ class RefundFlow(BaseFlow):
             )
 
     def is_continuation(self, intent_result: IntentResult, state: ConversationState) -> bool:
+        if not self.REFUND_PROCESSING_ENABLED:
+            return False
         if intent_result.intent == "refund":
             return True
         # Check if user message contains 5-13 digits (Order ID format)

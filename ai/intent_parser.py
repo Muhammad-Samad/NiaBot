@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from ai.base_client import LLMAPIError
 from ai.llm_factory import LLMFactory
 from ai.schemas import IntentResult
-from ai.prompts import INTENT_EXTRACTION_PROMPT, STATE_CONTEXT_INJECTION
+from ai.prompts import INTENT_EXTRACTION_PROMPT, STATE_CONTEXT_INJECTION, VERIFIED_ORDER_CONTEXT_INJECTION
 from core.state_manager import ConversationState
 from utils.logger import get_logger
 
@@ -56,6 +56,8 @@ class IntentParser:
                 known_entities=state.entities,
                 last_assistant_message=state.last_assistant_message or "None"
             )
+        if state and state.verified_order_id:
+            context_block += VERIFIED_ORDER_CONTEXT_INJECTION.format(order_id=state.verified_order_id)
 
         prompt = f"{INTENT_EXTRACTION_PROMPT}\n{context_block}\nUser Message: \"{user_message}\""
         

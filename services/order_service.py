@@ -26,6 +26,17 @@ class OrderService:
         }
         return mapping.get(carrier_code.lower())
 
+    # Customer-facing names for the carrier codes stored on shipments.
+    _COURIER_NAMES = {
+        "mnpshipping": "M&P Courier",
+        "lcsshipping": "Leopards Courier",
+    }
+
+    def _get_courier_name(self, carrier_code: str) -> str:
+        if not carrier_code:
+            return "Unknown"
+        return self._COURIER_NAMES.get(carrier_code.lower(), carrier_code)
+
     def track_order(self, increment_id: str) -> Dict[str, Any]:
         logger.debug(f"OrderService received tracking request for ID: {increment_id}")
         
@@ -139,7 +150,7 @@ class OrderService:
             if is_external:
                 lines.append("\nTracking Information:")
                 if active_order.tracking_number:
-                    lines.append(f"Courier: {active_order.carrier_code or 'Unknown'}")
+                    lines.append(f"Courier: {self._get_courier_name(active_order.carrier_code)}")
                     lines.append(f"Courier Status: {active_order.courier_status or 'Unknown'}")
                     lines.append(f"Tracking Number: {active_order.tracking_number}")
                     url = self._get_courier_url(active_order.carrier_code, active_order.tracking_number)

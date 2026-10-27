@@ -916,6 +916,7 @@
 
     const bubble = document.createElement('div');
     bubble.className = 'bubble ' + (role === 'bot' ? 'bot' : 'user');
+    bubble.dir = 'auto';  // Urdu-script replies read right-to-left
     bubble.innerHTML = role === 'bot' ? renderBotContent(content) : renderUserContent(content);
 
     // Product cards
@@ -1045,6 +1046,7 @@
   // as a multi-select: options toggle and a Submit button sends "1, 3".
   const MULTI_PROMPT_RE  = /\bone or more\b/i;
   const NUMBER_LIST_RE   = /^\s*\d{1,2}(?:\s*[,\s]\s*\d{1,2})*\s*$/;
+  const OPTIONS_MARKER_RE = /^OPTIONS::(.*)$/m;
 
   // The complaint item-selection prompt ends with an "ITEM_PICKER::[...]" line
   // holding the order items as JSON. It is rendered as a product table
@@ -1144,9 +1146,16 @@
         if (Array.isArray(items) && items.length) return renderItemPicker(raw, items);
       } catch (e) { /* fall back to the numbered list below */ }
     }
-    const text = raw.replace(ITEM_PICKER_RE, '');
-    if (!OPTION_PROMPT_RE.test(text)) return renderText(text);
-    const multi = MULTI_PROMPT_RE.test(text);
+    // Replies rewritten into the customer's language end with an
+    // "OPTIONS::{...}" line instead, since the prompt words may not be English.
+    const marker = raw.match(OPTIONS_MARKER_RE);
+    const text = raw.replace(ITEM_PICKER_RE, '').replace(OPTIONS_MARKER_RE, '').replace(/\n+$/, '');
+    let markerOpts = null;
+    if (marker) {
+      try { markerOpts = JSON.parse(marker[1]) || {}; } catch (e) { markerOpts = {}; }
+    }
+    if (!markerOpts && !OPTION_PROMPT_RE.test(text)) return renderText(text);
+    const multi = markerOpts ? !!markerOpts.multi : MULTI_PROMPT_RE.test(text);
 
     const lines = text.split('\n');
     let html = '', buffer = [], found = false;
