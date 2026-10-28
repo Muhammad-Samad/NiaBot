@@ -60,7 +60,22 @@ def no_price_limit():
     return ("no price_direction", lambda t: t.price_direction is None)
 
 
-# (name, memory, [(customer message, [checks]), ...])
+# Earlier non-shopping messages a case can start from (role, message).
+ORDER_CHAT = [
+    ("user", "mujhy mera order track krna hai"),
+    ("assistant", "Main aapki madad kar sakti hoon aapka order track karne mein. Barae meherbani apna Order ID bata dein."),
+    ("user", "2000098442"),
+    ("assistant", "Security ke liye please woh phone number bata dein jo is order ke saath register hai."),
+    ("user", "03112972475"),
+    ("assistant", "Aapka order 2000098442 abhi partial picked stage mein hai, matlab kuch items pick ho chuke hain."),
+    ("user", "mujhy nahi chahiye ab cancel krdo isy"),
+    ("assistant", "Aapka order ab fulfillment stage mein hai is liye ise automatically cancel nahi kiya ja sakta. "
+                  "Barah-e-karam humari Customer Support team se (021) 111-624-333 par raabta karein."),
+    ("user", "nahi krna rabta"),
+    ("assistant", "Agar aapko aur madad chahiye ho to barah-e-karam hamari Customer Support team se (021) 111-624-333 par raabta karein."),
+]
+
+# (name, memory, [(customer message, [checks]), ...], optional prior history)
 CASES = [
     ("gift_son_age", None, [
         ("suggest some gift options for my son", [action_in("search", "clarify")]),
@@ -94,7 +109,7 @@ CASES = [
         ("only large", [action("search"), has("sneaker")]),
     ]),
     ("audience_followup", None, [
-        ("perfumes", [action("search")]),
+        ("perfumes", [action("clarify")]),
         ("for men's", [action("search"), has("men", "perfume")]),
     ]),
     ("topic_switch_resets", None, [
@@ -149,6 +164,15 @@ CASES = [
     }, [
         ("basmati rice", [action("search"), has("rice"), lacks("gift", "son")]),
     ]),
+    # Real chat: vague requests after an order-tracking exchange were searched
+    # instead of clarified.
+    ("clarify_after_order_chat", None, [
+        ("acha mujhy perfumes dikhao", [action("clarify"), turn_type("new")]),
+        ("mujhy gift items chahiyen", [action("clarify"), turn_type("new")]),
+    ], ORDER_CHAT),
+    ("gift_memory_not_assumed", {"facts": ["Has a son, about 25 years old"], "past": []}, [
+        ("mujhy gift items chahiyen", [action("clarify")]),
+    ], ORDER_CHAT),
 ]
 
 
@@ -157,9 +181,10 @@ def _fake_products(turn):
     return [{"product_name": n, "price": 1500 * (i + 1), "category": ""} for i, n in enumerate(names)]
 
 
-def run_case(name, memory, turns):
+def run_case(name, memory, turns, prior=()):
     print(f"\n=== {name} ===")
-    state, history, shown, failures = {}, [], [], 0
+    state, shown, failures = {}, [], 0
+    history = [{"role": r, "message": m, "products": [], "age_minutes": 0} for r, m in prior]
     for msg, checks in turns:
         turn = conversation.understand(msg, state, history, shown, memory)
         print(f"  > {msg}")

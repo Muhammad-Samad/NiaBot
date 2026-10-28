@@ -15,42 +15,35 @@ Routing rule, checked in order:
      no operations flow/menu is already in progress, so it can't misfire on
      a stray digit typed mid-flow.
      A pick from the Policy & FAQ sub-menu goes to the policy domain.
-  2. Policy questions — domains/policy/intent.py's looks_like_policy()
-     (return policy, delivery charges, loyalty points, payment methods,
-     brands, store info...) go to the policy domain (ChromaDB RAG). This is
-     checked BEFORE operations stickiness, so a policy question asked in the
-     middle of an operations flow is answered without disturbing that flow:
-     the operations state is left untouched and the answer ends with a
-     reminder of where the flow left off, so the next reply continues it.
-     Exception: a flow still waiting for an order ID / phone number is reset
-     by any reply with no digits (other than "cancel"), and that reply is
-     routed as a brand-new message.
+  2. A flow still waiting for an order ID / phone number is reset by any
+     reply with no digits (other than "cancel"), and that reply is routed as
+     a brand-new message. "Who are you?" goes to operations' introduction.
   3. Stickiness — if this session is already in the middle of a stateful
      operations flow (order tracking waiting for an order id, a complaint
-     collecting details, etc.) or an explicit awaiting_menu reply, keep
-     routing to operations regardless of what the new message looks like.
-     This reuses operations' own StateManager.current_flow, so the router
-     doesn't need its own duplicate notion of "mid-flow".
-  4. Otherwise, a lightweight keyword/pattern pre-classifier decides if the
-     message LOOKS operational (order tracking/modify/cancel, refund,
-     complaint, urgent delivery, talk-to-a-human, a bare order id, a
-     greeting/goodbye). If so, hand off to operations, where its own
-     LLM-based IntentParser does the real, nuanced classification. If that
-     parser still says `general_policy`, operations hands the message to the
-     policy domain itself (its `policy_rag` tool).
-     Once the customer has verified an order in this session, follow-ups
-     about it that don't say "order" ("isy cancel kardo", "iska status?")
-     go to operations too, which acts on that remembered order.
-  5. Anything else — the default — goes to the shopping domain (product
-     search). When shopping's off-topic guard rejects the message, the
-     policy domain answers it instead: it covers store/policy questions the
-     patterns above missed, and politely declines anything unrelated.
-This keeps shopping as the primary/default bot, with operations and policy
-handling the turns they clearly own.
+     collecting details, etc.), keep routing to operations regardless of
+     what the new message looks like. Exception: a policy question
+     (domains/policy/intent.py's looks_like_policy()) is answered by the
+     policy domain without disturbing the flow, and the answer ends with a
+     reminder of where the flow left off, so the next reply continues it.
+  4. "cancel"/"reset" and a bare order ID always go to operations.
+  5. Everything else is classified by ONE LLM call (_llm_route): operations'
+     IntentParser, whose prompt also returns the domain (shopping /
+     operations / policy), given which assistant replied last and any order
+     verified this session. For operations the same result is passed on as
+     `pre_parsed`, so the message isn't classified twice.
+  6. Fallback when the LLM router is disabled (LLM_ROUTER_ENABLED=false),
+     fails, or is below LLM_ROUTER_MIN_CONFIDENCE: keyword patterns -
+     looks_like_policy() -> policy, _looks_operational() or a follow-up about
+     a verified order -> operations, otherwise shopping.
+Whenever shopping's off-topic guard rejects a message, the policy domain
+answers it instead (it politely declines anything unrelated to Naheed).
 """
 
+import os
 import re
+from collections import OrderedDict
 
+from ai.prompts import ROUTING_CONTEXT_INJECTION
 from domains.operations import service as operations_service
 from domains.policy import service as policy_service
 from domains.policy.intent import looks_like_policy
@@ -168,9 +161,11 @@ def _operations_result(
     conversation_id: str | None,
     forced_intent: str = None,
     forced_entities: dict = None,
+    pre_parsed=None,
 ) -> dict:
     result = operations_service.handle_message(
-        sid, raw_message, forced_intent=forced_intent, forced_entities=forced_entities
+        sid, raw_message, forced_intent=forced_intent, forced_entities=forced_entities,
+        pre_parsed=pre_parsed,
     )
     # Operations hands a `general_policy` intent to the policy domain via its
     # policy_rag tool - record that turn as a policy one.
@@ -208,9 +203,93 @@ def _resume_note(sid: str) -> str:
     return f"{note}\n\n(Type 'cancel' if you'd rather stop.)"
 
 
+# sid -> (domain, answer) of the last routed reply, so the LLM router knows
+# what a short reply ("medium", "yes", "2") is answering. In-memory, like
+# operations' StateManager; oldest sessions are dropped past the cap.
+_last_turns: "OrderedDict[str, tuple[str, str]]" = OrderedDict()
+_LAST_TURNS_CAP = 5000
+
+
 def _routed(result: dict, sid: str, reason: str) -> dict:
     logger.info(f"Routed to {result.get('domain')} (reason={reason}, sid={sid})")
+    if result.get("domain") in ("shopping", "operations", "policy"):
+        _last_turns[sid] = (result["domain"], result.get("answer") or "")
+        _last_turns.move_to_end(sid)
+        if len(_last_turns) > _LAST_TURNS_CAP:
+            _last_turns.popitem(last=False)
     return result
+
+
+def _shopping_result(
+    sid: str, message: str, conversation_id: str | None, customer_key: str | None, reason: str
+) -> dict:
+    result = shopping_service.handle_message(
+        sid, message, conversation_id, customer_key=customer_key
+    )
+    if result.get("answer") == OFF_TOPIC_REPLY:
+        # Shopping found no shopping angle - let the policy domain answer
+        # store/policy questions the routing missed (it politely declines
+        # anything unrelated to Naheed).
+        result = policy_service.handle_message(
+            sid, message, result.get("conversation_id"), entry="shopping_off_topic"
+        )
+        return _routed(result, sid, "shopping_off_topic")
+    result["domain"] = "shopping"
+    return _routed(result, sid, reason)
+
+
+_LLM_ROUTER_ENABLED = os.getenv("LLM_ROUTER_ENABLED", "true").strip().lower() == "true"
+try:
+    _LLM_ROUTER_MIN_CONFIDENCE = float(os.getenv("LLM_ROUTER_MIN_CONFIDENCE", "0.6"))
+except ValueError:
+    _LLM_ROUTER_MIN_CONFIDENCE = 0.6
+
+# Operations intents, for a classification that came back without a domain.
+_OPERATIONS_INTENTS = {
+    "agent_handoff", "cancel_order", "order_tracking", "refund", "complaint_tracking",
+    "complaint", "modify_order", "special_request", "greeting", "goodbye",
+}
+
+
+def _llm_route(sid: str, message: str):
+    """Classifies the message with the operations IntentParser, whose prompt
+    also picks the domain. Returns the IntentResult (with .domain set), or
+    None when the router is disabled, the LLM fails, or it isn't confident -
+    the caller then falls back to the keyword patterns."""
+    if not _LLM_ROUTER_ENABLED:
+        return None
+
+    routing_context = ""
+    last = _last_turns.get(sid)
+    if last:
+        last_domain, last_answer = last
+        routing_context = ROUTING_CONTEXT_INJECTION.format(
+            last_domain=last_domain, last_answer=last_answer[:300].replace('"', "'")
+        )
+
+    try:
+        decision = operations_service.classify(sid, message, routing_context)
+    except Exception as e:
+        logger.warning(f"LLM router unavailable, using keyword routing: {e} (sid={sid})")
+        return None
+
+    if not decision.domain:
+        if decision.intent == "general_policy":
+            decision.domain = "policy"
+        elif decision.intent in _OPERATIONS_INTENTS:
+            decision.domain = "operations"
+    if not decision.domain or decision.confidence < _LLM_ROUTER_MIN_CONFIDENCE:
+        logger.info(
+            f"LLM router unsure (domain={decision.domain}, intent={decision.intent}, "
+            f"confidence={decision.confidence}); using keyword routing (sid={sid})"
+        )
+        return None
+
+    logger.info(
+        f"LLM router: domain={decision.domain} intent={decision.intent} "
+        f"confidence={decision.confidence} (sid={sid})"
+    )
+    return decision
 
 
 def route_message(
@@ -353,8 +432,8 @@ def route_message(
             "identity",
         )
 
-    if looks_like_policy(message):
-        if mid_flow:
+    if mid_flow:
+        if looks_like_policy(message):
             # Answer without touching the operations state, then point the
             # customer back to the flow - their next reply continues it.
             result = policy_service.handle_message(
@@ -366,14 +445,38 @@ def route_message(
             )
             return _routed(result, sid, "policy_question_mid_flow")
         return _routed(
+            _operations_result(sid, message, conversation_id), sid, "mid_flow"
+        )
+
+    # "cancel"/"reset" and a bare order ID are always operations - no LLM.
+    if operations_service.is_cancellation(message) or operations_service.is_bare_order_id(sid, message):
+        return _routed(
+            _operations_result(sid, message, conversation_id), sid, "operational_rule"
+        )
+
+    decision = _llm_route(sid, message)
+    if decision:
+        if decision.domain == "operations":
+            return _routed(
+                _operations_result(sid, message, conversation_id, pre_parsed=decision),
+                sid,
+                "llm",
+            )
+        if decision.domain == "policy":
+            return _routed(
+                policy_service.handle_message(sid, message, conversation_id, entry="llm_router"),
+                sid,
+                "llm",
+            )
+        return _shopping_result(sid, message, conversation_id, customer_key, "llm")
+
+    # Fallback when the LLM router is off, unavailable or unsure: keyword
+    # patterns, with shopping as the default.
+    if looks_like_policy(message):
+        return _routed(
             policy_service.handle_message(sid, message, conversation_id),
             sid,
             "policy_question",
-        )
-
-    if mid_flow:
-        return _routed(
-            _operations_result(sid, message, conversation_id), sid, "mid_flow"
         )
     if _looks_operational(message):
         return _routed(
@@ -387,17 +490,4 @@ def route_message(
             sid,
             "verified_order_followup",
         )
-
-    result = shopping_service.handle_message(
-        sid, message, conversation_id, customer_key=customer_key
-    )
-    if result.get("answer") == OFF_TOPIC_REPLY:
-        # Shopping found no shopping angle - let the policy domain answer
-        # store/policy questions the patterns missed (it politely declines
-        # anything unrelated to Naheed).
-        result = policy_service.handle_message(
-            sid, message, result.get("conversation_id"), entry="shopping_off_topic"
-        )
-        return _routed(result, sid, "shopping_off_topic")
-    result["domain"] = "shopping"
-    return _routed(result, sid, "default")
+    return _shopping_result(sid, message, conversation_id, customer_key, "default")

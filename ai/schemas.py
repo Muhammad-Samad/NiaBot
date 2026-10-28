@@ -18,6 +18,14 @@ class IntentResult(BaseModel):
     mood: str = Field("happy", description="AI-judged customer mood based on their wording: 'happy' or 'sad'")
     escalation_recommended: bool = Field(False, description="Whether the LLM explicitly recommends connecting the user to a human CSR")
     reassurance_message: Optional[str] = Field(None, description="A dynamic, single-sentence empathetic reassurance opener if the customer is feeling 'sad'. Null otherwise.")
+    domain: Optional[str] = Field(None, description="Which assistant should answer: 'shopping', 'operations' or 'policy' (see router/domain_router.py)")
+
+    @field_validator("domain", mode="before")
+    @classmethod
+    def _normalize_domain(cls, v):
+        if not isinstance(v, str) or v.strip().lower() not in ("shopping", "operations", "policy"):
+            return None
+        return v.strip().lower()
 
     @field_validator("priority", mode="before")
     @classmethod

@@ -63,11 +63,20 @@ AGENT HANDOFF & ESCALATION RULES:
 - If the user explicitly requests an agent, set intent to `agent_handoff`, `escalation_recommended = true`, and `escalation_reason = "explicit_request"`.
 - If the user is just frustrated but hasn't requested an agent, keep the original intent (e.g., `order_tracking`), but set `escalation_recommended = true` and `escalation_reason = "customer_frustration"`.
 
+DOMAIN ROUTING RULES (the "domain" field - ALWAYS set it):
+NiaBot has three assistants. Pick the one that should answer this message:
+- "operations": the customer's OWN orders and support - order tracking, delivery of their order, cancelling, modifying, refunds/returns, complaints, complaint status, urgent delivery requests, talking to a human, greetings, goodbyes, thanks, and questions about NiaBot itself. Every intent except 'general_policy' (and shopping below) belongs here.
+- "policy": general store information not about one specific order of theirs - delivery charges/timings/cities, return and refund policy, payment methods, loyalty points, warranty, OTP, store locations and timings, company info - AND anything unrelated to Naheed (it politely declines). Use intent 'general_policy' (or 'unknown' if unrelated to Naheed).
+- "shopping": finding, browsing, comparing or buying products - product names, brands, categories, prices and budgets ("under 5000"), availability/stock, recommendations, sizes/colours/variants, adding to cart, and follow-ups about products already shown. Use intent 'general_query'.
+- A message about "my order" / "mera order" / "mujhe order nahi mila" is "operations", even without an order ID.
+- Short replies (a size, a colour, "yes", "dusra wala", a number) continue whatever the previous assistant message asked - use the ROUTING CONTEXT below when present.
+
 OUTPUT FORMAT:
 - Return ONLY valid JSON.
 - Never return Markdown blocks (e.g. ```json).
 - Required format:
 {
+  "domain": "operations" | "policy" | "shopping",
   "intent": "...",
   "confidence": 0.97,
   "entities": {
@@ -83,6 +92,29 @@ OUTPUT FORMAT:
 }
 
 FEW-SHOT EXAMPLES:
+(Examples without "domain" use "operations", except 'general_policy' ones, which use "policy".)
+
+# Domain routing
+User: "mujy order nahi mila abhi tak kahan hai"
+{"domain": "operations", "intent": "order_tracking", "confidence": 0.98, "entities": {}, "tool": "track_order"}
+
+User: "red shirt chahiye medium size mein"
+{"domain": "shopping", "intent": "general_query", "confidence": 0.97, "entities": {}, "tool": null}
+
+User: "5000 se kam mein acha blender batao"
+{"domain": "shopping", "intent": "general_query", "confidence": 0.97, "entities": {}, "tool": null}
+
+User: "Dettol soap available hai?"
+{"domain": "shopping", "intent": "general_query", "confidence": 0.96, "entities": {}, "tool": null}
+
+User: "delivery charges kitne hain"
+{"domain": "policy", "intent": "general_policy", "confidence": 0.97, "entities": {"policy_topic": "delivery", "response_mode": "standard"}, "tool": null}
+
+User: "Who won the cricket match?"
+{"domain": "policy", "intent": "unknown", "confidence": 0.95, "entities": {}, "tool": null}
+
+User: "thank you"
+{"domain": "operations", "intent": "goodbye", "confidence": 0.9, "entities": {}, "tool": null}
 
 # Negative Examples for Policy (Must be Order Tracking / Refund)
 User: "Mera order kidhar hai"
@@ -251,6 +283,14 @@ Placeholder for the complaint handling conversation flow.
 
 GENERAL_QUERY_FLOW_PROMPT = """
 Placeholder for general query handling.
+"""
+
+ROUTING_CONTEXT_INJECTION = """
+=========================================================
+ROUTING CONTEXT
+=========================================================
+The previous reply came from the {last_domain} assistant: "{last_answer}"
+A short reply that answers it (a size, colour, choice, "yes"/"no", a number) belongs to that same domain.
 """
 
 VERIFIED_ORDER_CONTEXT_INJECTION = """

@@ -111,7 +111,10 @@ class ConversationManager:
         state.customer_verified = True
         logger.debug(f"Reusing verified order {state.verified_order_id} for intent {intent_result.intent}")
 
-    def process_message_with_debug(self, message: str, session_id: str = "default", forced_intent: str = None, forced_entities: dict = None) -> Tuple[str, Dict[str, Any]]:
+    def process_message_with_debug(self, message: str, session_id: str = "default", forced_intent: str = None, forced_entities: dict = None, pre_parsed: SchemaIntentResult = None) -> Tuple[str, Dict[str, Any]]:
+        """`pre_parsed` is the classification the domain router's LLM call
+        already produced for this message - reused instead of parsing it a
+        second time."""
         message_id = str(uuid.uuid4())
         # Set request_id and session_id for the current context
         request_id_var.set(message_id)
@@ -223,7 +226,7 @@ class ConversationManager:
         else:
             start_time = time.time()
             try:
-                ai_result = self.parser.parse_intent(message, state=state, message_id=message_id)
+                ai_result = pre_parsed or self.parser.parse_intent(message, state=state, message_id=message_id)
                 duration_ms = int((time.time() - start_time) * 1000)
 
                 if ai_result.confidence >= self.confidence_threshold:

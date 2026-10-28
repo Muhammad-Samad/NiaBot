@@ -42,10 +42,12 @@ class IntentParser:
             
         return text
 
-    def parse_intent(self, user_message: str, state: Optional[ConversationState] = None, message_id: str = "unknown") -> IntentResult:
+    def parse_intent(self, user_message: str, state: Optional[ConversationState] = None, message_id: str = "unknown", extra_context: str = "") -> IntentResult:
         """
         Sends the message to Gemini and returns a validated IntentResult.
         Optionally uses conversation state to provide contextual history.
+        `extra_context` is appended to the state context - the domain router
+        passes which assistant answered last (see router/domain_router.py).
         """
         context_block = ""
         if state and state.current_flow:
@@ -58,6 +60,7 @@ class IntentParser:
             )
         if state and state.verified_order_id:
             context_block += VERIFIED_ORDER_CONTEXT_INJECTION.format(order_id=state.verified_order_id)
+        context_block += extra_context
 
         prompt = f"{INTENT_EXTRACTION_PROMPT}\n{context_block}\nUser Message: \"{user_message}\""
         

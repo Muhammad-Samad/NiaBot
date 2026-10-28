@@ -73,12 +73,28 @@ def set_menu_stage(session_id: str, stage) -> None:
     _conversation_manager.state_manager.update_state(session_id, {"awaiting_menu": stage})
 
 
-def handle_message(session_id: str, message: str, forced_intent: str = None, forced_entities: dict = None) -> dict:
+def classify(session_id: str, message: str, routing_context: str = ""):
+    """One LLM call that picks both the domain (`IntentResult.domain`) and the
+    operations intent for a message - see router/domain_router.py. Raises
+    IntentParserError when the LLM is unavailable or returns junk."""
+    state = _conversation_manager.state_manager.get_state(session_id)
+    return _conversation_manager.parser.parse_intent(message, state=state, extra_context=routing_context)
+
+
+def is_bare_order_id(session_id: str, message: str) -> bool:
+    """True when the message is just an order ID that operations would start
+    tracking on its own (no LLM needed)."""
+    state = _conversation_manager.state_manager.get_state(session_id)
+    return _conversation_manager._order_tracking_fast_path(message, state) is not None
+
+
+def handle_message(session_id: str, message: str, forced_intent: str = None, forced_entities: dict = None, pre_parsed=None) -> dict:
     """`forced_intent`/`forced_entities` let a numbered-menu selection (see
     router/menu.py) skip LLM/rule-based classification entirely and go
     straight into the matching flow, while still reusing the normal
-    escalation/tool-dispatch/persistence pipeline."""
+    escalation/tool-dispatch/persistence pipeline. `pre_parsed` is the
+    router's classify() result, reused instead of classifying twice."""
     answer, debug_data = _conversation_manager.process_message_with_debug(
-        message, session_id, forced_intent=forced_intent, forced_entities=forced_entities
+        message, session_id, forced_intent=forced_intent, forced_entities=forced_entities, pre_parsed=pre_parsed
     )
     return {"answer": answer, "debug": debug_data}
