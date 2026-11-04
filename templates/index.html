@@ -697,9 +697,26 @@
   }
   .toast.green { background: var(--accent-green); }
   .toast.red   { background: var(--brand-red); }
+  /* ─── Embedded mode (inside the niabot-widget.js iframe) ─── */
+  body.embed .topbar { padding: 0 10px 0 14px; gap: 8px; height: 52px; }
+  body.embed .topbar-logo { font-size: 18px; }
+  body.embed .topbar-logo span { display: none; }
+  body.embed .topbar-right { gap: 6px; }
+  body.embed .cart-btn { padding: 5px 9px; font-size: 12px; }
+  body.embed .btn-label { display: none; }
+  body.embed .messages { padding: 14px; }
+  body.embed .welcome-box { max-width: 100%; padding: 18px 14px; }
+  body.embed .cart-sidebar { width: 100%; max-width: 320px; }
+  body.embed .toast { white-space: normal; max-width: calc(100% - 32px); text-align: center; }
+  .widget-close-btn {
+    background: none; border: none; color: #fff;
+    font-size: 20px; line-height: 1; cursor: pointer;
+    padding: 4px 6px; border-radius: var(--radius-sm);
+  }
+  .widget-close-btn:hover { background: rgba(255,255,255,.15); }
 </style>
 </head>
-<body>
+<body{% if embed %} class="embed"{% endif %}>
 
 <!-- Top bar -->
 <div class="topbar">
@@ -709,11 +726,14 @@
   </div>
   <div class="topbar-right">
     <button class="cart-btn" title="Start a new conversation" onclick="resetConversation()">
-      ↻ New Chat
+      ↻<span class="btn-label"> New Chat</span>
     </button>
     <button class="cart-btn" onclick="toggleCart()">
-      🛒 Cart <span class="cart-count" id="cart-count">0</span>
+      🛒<span class="btn-label"> Cart</span> <span class="cart-count" id="cart-count">0</span>
     </button>
+    {% if embed %}
+    <button class="widget-close-btn" title="Minimize chat" aria-label="Minimize chat" onclick="closeWidget()">✕</button>
+    {% endif %}
   </div>
 </div>
 
@@ -839,6 +859,13 @@
     localStorage.setItem('npk_session_id', newSid);
     localStorage.removeItem('npk_conversation_id');
     location.reload();
+  }
+
+  // ─── Embedded widget ────────────────────────────────────────────────────
+  // When loaded by static/niabot-widget.js the page lives in an iframe on the
+  // host site; the ✕ button asks the host script to collapse the widget.
+  function closeWidget() {
+    if (window.parent !== window) window.parent.postMessage({ type: 'niabot:close' }, '*');
   }
 
   // ─── Auto-resize textarea ─────────────────────────────────────────────────

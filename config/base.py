@@ -14,6 +14,10 @@ FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "npk-combine-dev-secret-key")
 FLASK_DEBUG = os.getenv("FLASK_DEBUG", "false").lower() == "true"
 FLASK_PORT = int(os.getenv("FLASK_PORT", "5000"))
 
+# Space-separated origins allowed to embed the chat widget in an iframe, e.g.
+# "https://www.naheed.pk https://naheed.pk". Empty = any site may embed it.
+EMBED_ALLOWED_ORIGINS = os.getenv("EMBED_ALLOWED_ORIGINS", "").strip()
+
 # ─── Assistant persona ──────────────────────────────────────────────────────
 # The name customers see in the chat UI and in the bot's own replies.
 # "Nia" = Naheed Intelligent Assistant.

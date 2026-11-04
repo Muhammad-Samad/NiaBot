@@ -50,11 +50,23 @@ policy_service.warm_up()
 logger.info(f"NiaBot started (port={base_config.FLASK_PORT}, debug={base_config.FLASK_DEBUG})")
 
 
+@app.after_request
+def allow_embedding(response):
+    # The chat UI is embedded on other sites via static/niabot-widget.js,
+    # which loads "/?embed=1" in an iframe. EMBED_ALLOWED_ORIGINS restricts
+    # which sites may frame it; unset = no header, so any site can.
+    if base_config.EMBED_ALLOWED_ORIGINS:
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'self' " + base_config.EMBED_ALLOWED_ORIGINS
+    return response
+
+
 @app.route("/")
 def index():
     # sid/conversation_id are minted and persisted client-side (localStorage)
     # and sent with every /api/chat call — see templates/index.html.
-    return render_template("index.html")
+    # ?embed=1 = loaded inside the widget iframe: compact header + a close
+    # button that tells the host page to collapse the widget.
+    return render_template("index.html", embed=request.args.get("embed") == "1")
 
 
 @app.route("/api/chat", methods=["POST"])
