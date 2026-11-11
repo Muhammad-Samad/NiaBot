@@ -9,18 +9,28 @@
  *
  *   <script>
  *     window.NiaBotSettings = {
- *       position: 'right',          // 'right' (default) or 'left'
- *       customerToken: '<id>.<sig>' // signed logged-in customer id (same as ?ct=)
+ *       position: 'right',           // 'right' (default) or 'left'
+ *       customerToken: '<id>.<sig>', // signed logged-in customer id (same as ?ct=)
+ *       // Adds a product to the HOST website's cart (NiaBot has no cart of its
+ *       // own). Called when the customer presses "+ Add" on a product card:
+ *       //   item = { product_id: '123', qty: 1, product_name: '...', sku: '...', price: 99 }
+ *       // (only product_id + qty matter for the cart; the rest is for tracking)
+ *       // Return { ok: true } or { ok: false, message: '...' }, or a
+ *       // promise / jQuery deferred of one. Without it, product cards show a
+ *       // "View" link to the product page instead of "+ Add".
+ *       addToCart: function (item) { ... }
  *     };
  *   </script>
  *
  * Control it from the host page (calls made before the script loads are queued):
  *
  *   NiaBot('open');  NiaBot('close');  NiaBot('toggle');
+ *   NiaBot('cartCount', 3);   // host cart count, shown on NiaBot's cart badge
  *
  * The chat itself is the normal NiaBot page ("/?embed=1") in an iframe, so
- * every feature (shopping, cart, orders, complaints, uploads, memory) works
- * exactly as on niabot.naheed.pk, and the host page's CSS/JS can't affect it.
+ * every feature (shopping, orders, complaints, uploads, memory) works exactly
+ * as on niabot.naheed.pk, and the host page's CSS/JS can't affect it. The
+ * iframe talks to this script with postMessage (see the message listener).
  */
 (function () {
   'use strict';
@@ -35,7 +45,9 @@
   var settings = window.NiaBotSettings || {};
   var side = settings.position === 'left' ? 'left' : 'right';
   var customerToken = settings.customerToken || window.NIABOT_CUSTOMER_TOKEN || '';
+  var hostAddToCart = typeof settings.addToCart === 'function' ? settings.addToCart : null;
   var STATE_KEY = 'niabot_widget_open';
+  var cartCount = null;   // last count from NiaBot('cartCount', n); null = not told yet
 
   var CSS = [
     ':host { all: initial; }',
@@ -120,7 +132,12 @@
   // keeping the conversation on screen for the next open.
   function ensureFrame() {
     if (iframe) return;
-    var src = BOT_URL + '/?embed=1' + (customerToken ? '&ct=' + encodeURIComponent(customerToken) : '');
+    // host = this page's origin, the only origin the chat page will post to /
+    // accept messages from; cart=1 = the host can take "+ Add" (addToCart).
+    var src = BOT_URL + '/?embed=1'
+      + '&host=' + encodeURIComponent(window.location.origin)
+      + (hostAddToCart ? '&cart=1' : '')
+      + (customerToken ? '&ct=' + encodeURIComponent(customerToken) : '');
     iframe = document.createElement('iframe');
     iframe.src = src;
     iframe.title = 'NiaBot chat';
@@ -139,19 +156,66 @@
   function close()  { setOpen(false); }
   function toggle() { setOpen(!root.classList.contains('open')); }
 
-  // Messages from the chat page inside the iframe (its ✕ button).
+  function postToFrame(msg) {
+    if (iframe && iframe.contentWindow) iframe.contentWindow.postMessage(msg, BOT_URL);
+  }
+
+  function sendCartCount() {
+    if (cartCount !== null) postToFrame({ type: 'niabot:cartCount', count: cartCount });
+  }
+
+  // "+ Add" on a product card: the host page adds it to its own cart (with
+  // its own session cookies), and the outcome goes back to the chat page.
+  function addToHostCart(data) {
+    var requestId = data.requestId;
+    var productId = String(data.product_id || '');
+    function reply(ok, message) {
+      postToFrame({ type: 'niabot:cartResult', requestId: requestId, ok: !!ok, message: message || '' });
+    }
+    if (!hostAddToCart) return reply(false, 'Adding to cart is not available here.');
+    if (!/^\d+$/.test(productId)) return reply(false, 'This product cannot be added from the chat.');
+
+    var result;
+    try {
+      result = hostAddToCart({
+        product_id: productId,
+        qty: 1,   // one item per "+ Add" press
+        product_name: String(data.product_name || ''),
+        sku: String(data.sku || ''),
+        price: Number(data.price) || 0
+      });
+    } catch (err) {
+      return reply(false, '');
+    }
+    // Accepts a plain value, a Promise or a jQuery deferred.
+    Promise.resolve(result).then(function (r) {
+      reply(r && r.ok, r && r.message);
+    }, function () {
+      reply(false, '');
+    });
+  }
+
+  // Messages from the chat page inside the iframe.
   window.addEventListener('message', function (e) {
     if (e.origin !== BOT_URL || !iframe || e.source !== iframe.contentWindow) return;
-    if (e.data && e.data.type === 'niabot:close') close();
+    var data = e.data || {};
+    if (data.type === 'niabot:close') close();
+    else if (data.type === 'niabot:ready') sendCartCount();
+    else if (data.type === 'niabot:addToCart') addToHostCart(data);
   });
 
-  // Public API: NiaBot('open' | 'close' | 'toggle'), replaying calls queued
-  // by a host page that ran before this script loaded.
+  // Public API: NiaBot('open' | 'close' | 'toggle' | 'cartCount', n),
+  // replaying calls queued by a host page that ran before this script loaded.
   var queued = (window.NiaBot && window.NiaBot.q) || [];
-  window.NiaBot = function (cmd) {
+  window.NiaBot = function (cmd, arg) {
     if (cmd === 'open') open();
     else if (cmd === 'close') close();
     else if (cmd === 'toggle') toggle();
+    else if (cmd === 'cartCount') {
+      var n = parseInt(arg, 10);
+      cartCount = isNaN(n) || n < 0 ? 0 : n;
+      sendCartCount();
+    }
   };
 
   function init() {

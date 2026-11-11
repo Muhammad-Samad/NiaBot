@@ -85,6 +85,8 @@
     transition: background .15s;
   }
   .cart-btn:hover { background: rgba(255,255,255,.25); }
+  .cart-badge, .cart-badge:hover { cursor: default; background: rgba(255,255,255,.15); }
+  .cart-badge[hidden] { display: none; }
   .cart-count {
     background: #fff;
     color: var(--brand-red);
@@ -465,45 +467,9 @@
     transition: background .15s;
   }
   .add-btn:hover { background: var(--brand-red-dk); }
-
-  /* Cart action banner */
-  .cart-banner {
-    margin-top: 10px;
-    padding: 10px 12px;
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-  }
-  .cart-banner.confirm {
-    background: #FFF8E1;
-    border: 1px solid #FFD54F;
-    color: #7B5800;
-  }
-  .cart-banner.added {
-    background: var(--accent-green-lt);
-    border: 1px solid #A8D5BC;
-    color: var(--accent-green);
-    font-weight: 600;
-  }
-  .confirm-btns { display: flex; gap: 8px; margin-top: 8px; }
-  .confirm-yes {
-    background: var(--accent-green);
-    color: #fff;
-    border: none;
-    border-radius: var(--radius-sm);
-    padding: 5px 14px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .confirm-no {
-    background: #fff;
-    color: var(--text-secondary);
-    border: 1px solid var(--neutral-border);
-    border-radius: var(--radius-sm);
-    padding: 5px 14px;
-    font-size: 12px;
-    cursor: pointer;
-  }
+  .add-btn:disabled { opacity: .7; cursor: default; }
+  .add-btn.added, .add-btn.added:hover { background: var(--accent-green); }
+  a.add-btn { text-decoration: none; display: inline-block; }
 
   /* ─── Input bar ─── */
   .input-bar {
@@ -556,124 +522,6 @@
   .send-btn:active { transform: scale(.94); }
   .send-btn:disabled { background: var(--neutral-border); cursor: not-allowed; }
 
-  /* ─── Cart sidebar ─── */
-  .cart-sidebar {
-    width: 320px;
-    flex-shrink: 0;
-    background: var(--neutral-card);
-    border-left: 1px solid var(--neutral-border);
-    display: flex;
-    flex-direction: column;
-    transform: translateX(100%);
-    transition: transform .25s ease;
-    position: absolute;
-    right: 0; top: 0; bottom: 0;
-    z-index: 100;
-    box-shadow: -4px 0 24px rgba(0,0,0,.1);
-  }
-  .cart-sidebar.open { transform: translateX(0); }
-  .cart-header {
-    padding: 16px 18px;
-    border-bottom: 1px solid var(--neutral-border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .cart-header h3 { font-size: 15px; font-weight: 700; }
-  .close-cart {
-    background: none; border: none;
-    font-size: 18px; cursor: pointer;
-    color: var(--text-secondary);
-    line-height: 1;
-  }
-  .cart-items-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .cart-empty {
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 13px;
-    margin-top: 60px;
-  }
-  .cart-empty .icon { font-size: 36px; margin-bottom: 8px; }
-
-  .cart-item {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    padding: 10px;
-    background: var(--neutral-bg);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--neutral-border);
-  }
-  .ci-info { flex: 1; min-width: 0; }
-  .ci-name { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ci-price { font-size: 12px; color: var(--brand-red); font-weight: 700; margin-top: 2px; }
-  .ci-qty { font-size: 11px; color: var(--text-muted); }
-  .ci-remove {
-    background: none; border: none;
-    font-size: 16px; cursor: pointer;
-    color: var(--text-muted);
-    padding: 2px;
-    line-height: 1;
-    flex-shrink: 0;
-  }
-  .ci-remove:hover { color: var(--brand-red); }
-
-  .cart-footer {
-    padding: 14px 18px;
-    border-top: 1px solid var(--neutral-border);
-  }
-  .cart-total {
-    display: flex;
-    justify-content: space-between;
-    font-size: 14px;
-    font-weight: 700;
-    margin-bottom: 12px;
-  }
-  .cart-total span:last-child { color: var(--brand-red); }
-  .checkout-btn {
-    width: 100%;
-    background: var(--brand-red);
-    color: #fff;
-    border: none;
-    border-radius: var(--radius-sm);
-    padding: 11px;
-    font-size: 14px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: background .15s;
-  }
-  .checkout-btn:hover { background: var(--brand-red-dk); }
-  .checkout-btn:disabled { background: var(--neutral-border); cursor: not-allowed; }
-  .clear-btn {
-    width: 100%;
-    background: none;
-    color: var(--text-secondary);
-    border: 1px solid var(--neutral-border);
-    border-radius: var(--radius-sm);
-    padding: 8px;
-    font-size: 12.5px;
-    cursor: pointer;
-    margin-top: 8px;
-    transition: border-color .15s;
-  }
-  .clear-btn:hover { border-color: var(--brand-red); color: var(--brand-red); }
-
-  /* Overlay */
-  .overlay {
-    display: none;
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,.3);
-    z-index: 99;
-  }
-  .overlay.show { display: block; }
-
   /* ─── Toast ─── */
   .toast {
     position: fixed;
@@ -706,7 +554,6 @@
   body.embed .btn-label { display: none; }
   body.embed .messages { padding: 14px; }
   body.embed .welcome-box { max-width: 100%; padding: 18px 14px; }
-  body.embed .cart-sidebar { width: 100%; max-width: 320px; }
   body.embed .toast { white-space: normal; max-width: calc(100% - 32px); text-align: center; }
   .widget-close-btn {
     background: none; border: none; color: #fff;
@@ -728,17 +575,16 @@
     <button class="cart-btn" title="Start a new conversation" onclick="resetConversation()">
       ↻<span class="btn-label"> New Chat</span>
     </button>
-    <button class="cart-btn" onclick="toggleCart()">
+    <!-- Count of the HOST website's cart (shown only when embedded on a site
+         that can take "+ Add"); display only, not clickable. -->
+    <div class="cart-btn cart-badge" id="cart-badge" role="status" title="Items in your cart" hidden>
       🛒<span class="btn-label"> Cart</span> <span class="cart-count" id="cart-count">0</span>
-    </button>
+    </div>
     {% if embed %}
     <button class="widget-close-btn" title="Minimize chat" aria-label="Minimize chat" onclick="closeWidget()">✕</button>
     {% endif %}
   </div>
 </div>
-
-<!-- Overlay -->
-<div class="overlay" id="overlay" onclick="toggleCart()"></div>
 
 <!-- Layout -->
 <div class="layout">
@@ -782,33 +628,12 @@
     </div>
   </div>
 
-  <!-- Cart sidebar -->
-  <div class="cart-sidebar" id="cart-sidebar">
-    <div class="cart-header">
-      <h3>Your Cart</h3>
-      <button class="close-cart" onclick="toggleCart()">✕</button>
-    </div>
-    <div class="cart-items-list" id="cart-items-list">
-      <div class="cart-empty"><div class="icon">🛒</div><p>Your cart is empty</p></div>
-    </div>
-    <div class="cart-footer">
-      <div class="cart-total">
-        <span>Total</span>
-        <span id="cart-total-price">Rs. 0.00</span>
-      </div>
-      <button class="checkout-btn" id="checkout-btn" onclick="placeOrder()" disabled>Checkout</button>
-      <button class="clear-btn" onclick="clearCart()">Clear cart</button>
-    </div>
-  </div>
-
 </div>
 
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
 <script>
-  let pendingCartItem = null;   // holds product info awaiting confirmation
-
   // ─── Client-side session id (browser cache) ────────────────────────────────
   // Identity lives in localStorage instead of a Flask cookie session so it
   // survives cross-origin embedding; the server persists all conversation
@@ -850,9 +675,9 @@
   let conversationId = localStorage.getItem('npk_conversation_id') || null;
 
   // ─── Reset conversation ─────────────────────────────────────────────────
-  // Nothing is deleted server-side (chat history and cart are looked up by
-  // sid) — this just retires the current sid and mints a fresh one, so the
-  // old conversation/cart are simply no longer referenced and the app comes
+  // Nothing is deleted server-side (chat history is looked up by sid) — this
+  // just retires the current sid and mints a fresh one, so the old
+  // conversation is simply no longer referenced and the app comes
   // back up as a brand new session (including the welcome menu).
   function resetConversation() {
     if (!confirm('Start a new conversation? Your current chat will no longer be shown here (nothing is deleted).')) return;
@@ -871,6 +696,113 @@
   // host site; the ✕ button asks the host script to collapse the widget.
   function closeWidget() {
     if (window.parent !== window) window.parent.postMessage({ type: 'niabot:close' }, '*');
+  }
+
+  // ─── Host website cart ──────────────────────────────────────────────────
+  // NiaBot has no cart of its own. Embedded on a site whose widget settings
+  // provide addToCart (?cart=1), "+ Add" asks that page (via the widget
+  // script) to add the product to the site's real cart, and the page sends
+  // its cart count back for the header badge. ?host= is the embedding page's
+  // origin: the only origin we post to or accept messages from.
+  const HOST_ORIGIN = (() => {
+    const h = new URLSearchParams(location.search).get('host') || '';
+    try { return h && new URL(h).origin === h ? h : null; } catch (e) { return null; }
+  })();
+  const IS_EMBEDDED = window.parent !== window;
+  const HOST_CART = IS_EMBEDDED && !!HOST_ORIGIN
+    && new URLSearchParams(location.search).get('cart') === '1';
+  const ADD_TIMEOUT_MS = 20000;
+  const pendingAdds = new Map();   // requestId -> resolve
+  let nextAddId = 1;
+
+  function postToHost(msg) {
+    if (HOST_CART) window.parent.postMessage(msg, HOST_ORIGIN);
+  }
+
+  function setCartCount(n) {
+    const count = Math.max(0, parseInt(n, 10) || 0);
+    document.getElementById('cart-count').textContent = count > 99 ? '99+' : String(count);
+    document.getElementById('cart-badge').hidden = false;
+  }
+
+  window.addEventListener('message', e => {
+    if (!HOST_CART || e.source !== window.parent || e.origin !== HOST_ORIGIN) return;
+    const data = e.data || {};
+    if (data.type === 'niabot:cartCount') {
+      setCartCount(data.count);
+    } else if (data.type === 'niabot:cartResult') {
+      const resolve = pendingAdds.get(data.requestId);
+      if (resolve) resolve({ ok: !!data.ok, message: String(data.message || '') });
+    }
+  });
+
+  // Resolves { ok, message } once the host page has tried the add.
+  function addToHostCart(product) {
+    const requestId = nextAddId++;
+    return new Promise(resolve => {
+      const timer = setTimeout(() => done({ ok: false, message: '' }), ADD_TIMEOUT_MS);
+      function done(result) {
+        clearTimeout(timer);
+        pendingAdds.delete(requestId);
+        resolve(result);
+      }
+      pendingAdds.set(requestId, done);
+      postToHost({
+        type: 'niabot:addToCart',
+        requestId,
+        product_id: String(product.product_id),
+        product_name: product.product_name || '',
+        sku: product.sku || '',
+        price: Number(product.price) || 0,
+      });
+    });
+  }
+
+  // Only an in-stock simple product can be added by id alone; configurable /
+  // bundle products need options picked on the product page. Old history
+  // cards carry no type_id - try them, the site rejects what it can't add.
+  function canQuickAdd(p) {
+    if (!HOST_CART || !/^\d+$/.test(String(p.product_id || ''))) return false;
+    if (p.in_stock === false) return false;
+    return !p.type_id || p.type_id === 'simple' || p.type_id === 'virtual';
+  }
+
+  // Product cards rendered so far; buttons refer to them by index.
+  const shownProducts = [];
+
+  function productButtonHtml(p) {
+    if (canQuickAdd(p)) {
+      shownProducts.push(p);
+      return `<button class="add-btn" onclick="addFromCard(this, ${shownProducts.length - 1})">+ Add</button>`;
+    }
+    if (!/^https?:\/\//i.test(p.url || '')) return '';
+    // Embedded: open the product in the host page itself (options, stock, etc.).
+    const target = IS_EMBEDDED ? '_top' : '_blank';
+    const label = p.in_stock === false ? 'Out of stock' : 'View';
+    return `<a class="add-btn" href="${escapeAttr(p.url)}" target="${target}" rel="noopener">${label}</a>`;
+  }
+
+  async function addFromCard(btn, index) {
+    const product = shownProducts[index];
+    if (!product || btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = 'Adding…';
+    const result = await addToHostCart(product);
+    const name = product.display_name || product.product_name || 'Item';
+    if (result.ok) {
+      btn.textContent = '✓ Added';
+      btn.classList.add('added');
+      showToast(`✓ ${name} added to your cart`, 'green');
+    } else {
+      btn.textContent = '+ Add';
+      showToast(result.message || `Sorry, couldn't add ${name} to your cart. Please try again.`, 'red');
+    }
+    // One item per press: re-enable so the customer can add another.
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = '+ Add';
+      btn.classList.remove('added');
+    }, result.ok ? 1500 : 0);
   }
 
   // ─── Auto-resize textarea ─────────────────────────────────────────────────
@@ -930,7 +862,7 @@
   }
 
   // ─── Append message bubble ────────────────────────────────────────────────
-  function appendMessage(role, content, products = [], cartAction = null) {
+  function appendMessage(role, content, products = []) {
     const welcome = document.getElementById('welcome');
     if (welcome) welcome.remove();
 
@@ -969,32 +901,11 @@
             ${p.price ? `<div class="product-price">Rs. ${Number(p.price).toLocaleString('en-PK', {minimumFractionDigits:2})}</div>` : ''}
             ${p.category ? `<div class="product-cat">${escapeHtml(p.category.split(', ')[0]).replace(/&#39;/g, "'")}</div>` : ''}
           </div>
-          <button class="add-btn" onclick='quickAddToCart(${JSON.stringify(p)})'>+ Add</button>
+          ${productButtonHtml(p)}
         `;
         grid.appendChild(card);
       });
       bubble.appendChild(grid);
-    }
-
-    // Cart action banners
-    if (cartAction) {
-      const banner = document.createElement('div');
-      if (cartAction.type === 'confirm_request') {
-        pendingCartItem = cartAction;
-        banner.className = 'cart-banner confirm';
-        banner.innerHTML = `
-          Add <strong>${escapeHtml(cartAction.product_name)}</strong>
-          (qty: ${cartAction.quantity}) to your cart?
-          <div class="confirm-btns">
-            <button class="confirm-yes" onclick="confirmCart()">✓ Yes, add it</button>
-            <button class="confirm-no" onclick="dismissCart()">No thanks</button>
-          </div>`;
-      } else if (cartAction.type === 'added') {
-        banner.className = 'cart-banner added';
-        banner.innerHTML = `✓ <strong>${escapeHtml(cartAction.product_name)}</strong> ×${cartAction.quantity} added to cart!`;
-        refreshCart();
-      }
-      bubble.appendChild(banner);
     }
 
     row.appendChild(avatar);
@@ -1043,8 +954,7 @@
         localStorage.setItem('npk_conversation_id', conversationId);
         localStorage.removeItem('npk_new_chat');
 
-        appendMessage('bot', data.answer, data.products, data.cart_action);
-        if (data.cart_action?.type === 'added') refreshCart();
+        appendMessage('bot', data.answer, data.products);
       }
     } catch (err) {
       document.getElementById('typing')?.remove();
@@ -1419,130 +1329,6 @@
       </a>`).join('') + `</div>`;
   }
 
-  // ─── Quick add from product card ──────────────────────────────────────────
-  async function quickAddToCart(product) {
-    product.quantity = product.quantity || 1;
-    const res = await fetch('/api/cart/add', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...product, sid: sessionId }),
-    });
-    const data = await res.json();
-    if (data.success) {
-      showToast(`✓ ${product.product_name} added!`, 'green');
-      refreshCart();
-    }
-  }
-
-  // ─── Confirm / dismiss cart from banner ───────────────────────────────────
-  async function confirmCart() {
-    if (!pendingCartItem) return;
-    const product = {
-      product_id:   pendingCartItem.product_id || '',
-      product_name: pendingCartItem.product_name,
-      price:        pendingCartItem.price || 0,
-      quantity:     pendingCartItem.quantity || 1,
-    };
-    await quickAddToCart(product);
-    pendingCartItem = null;
-    // Replace banner with confirmation
-    document.querySelectorAll('.cart-banner.confirm').forEach(b => {
-      b.className = 'cart-banner added';
-      b.innerHTML = `✓ <strong>${escapeHtml(product.product_name)}</strong> ×${product.quantity} added to cart!`;
-    });
-  }
-
-  function dismissCart() {
-    pendingCartItem = null;
-    document.querySelectorAll('.cart-banner.confirm').forEach(b => b.remove());
-  }
-
-  // ─── Cart sidebar ─────────────────────────────────────────────────────────
-  function toggleCart() {
-    const sidebar  = document.getElementById('cart-sidebar');
-    const overlay  = document.getElementById('overlay');
-    const isOpen   = sidebar.classList.contains('open');
-    sidebar.classList.toggle('open', !isOpen);
-    overlay.classList.toggle('show', !isOpen);
-    if (!isOpen) refreshCart();
-  }
-
-  async function refreshCart() {
-    const res  = await fetch('/api/cart?sid=' + encodeURIComponent(sessionId));
-    const data = await res.json();
-    const list = document.getElementById('cart-items-list');
-    const countEl = document.getElementById('cart-count');
-    const totalEl = document.getElementById('cart-total-price');
-    const checkoutBtn = document.getElementById('checkout-btn');
-
-    countEl.textContent = data.items.length;
-    totalEl.textContent = 'Rs. ' + Number(data.total).toLocaleString('en-PK', {minimumFractionDigits: 2});
-    checkoutBtn.disabled = data.items.length === 0;
-
-    if (data.items.length === 0) {
-      list.innerHTML = '<div class="cart-empty"><div class="icon">🛒</div><p>Your cart is empty</p></div>';
-      return;
-    }
-
-    list.innerHTML = '';
-    data.items.forEach(item => {
-      const el = document.createElement('div');
-      el.className = 'cart-item';
-      el.innerHTML = `
-        <div class="ci-info">
-          <div class="ci-name" title="${escapeAttr(item.product_name)}">${escapeHtml(item.product_name)}</div>
-          <div class="ci-price">Rs. ${Number(item.price).toLocaleString('en-PK', {minimumFractionDigits:2})}</div>
-          <div class="ci-qty">Qty: ${item.quantity}</div>
-        </div>
-        <button class="ci-remove" onclick="removeItem('${escapeAttr(item.product_id)}')">✕</button>
-      `;
-      list.appendChild(el);
-    });
-  }
-
-  async function removeItem(productId) {
-    await fetch('/api/cart/remove', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ product_id: productId, sid: sessionId }),
-    });
-    refreshCart();
-  }
-
-  async function clearCart() {
-    if (!confirm('Clear your entire cart?')) return;
-    await fetch('/api/cart/clear', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sid: sessionId }),
-    });
-    refreshCart();
-  }
-
-  async function placeOrder() {
-    const name    = prompt('Your name:');
-    if (!name) return;
-    const phone   = prompt('Phone number:');
-    const address = prompt('Delivery address:');
-
-    const res = await fetch('/api/order/place', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, phone, address, sid: sessionId }),
-    });
-    const data = await res.json();
-    if (data.success) {
-      showToast(`🎉 ${data.message}`, 'green');
-      refreshCart();
-      appendMessage('bot',
-        `✅ Your order ${data.order_ref} has been placed! Our team will contact you at ${phone} for delivery confirmation.`
-      );
-      toggleCart();
-    } else {
-      showToast(data.error || 'Order failed', 'red');
-    }
-  }
-
   // ─── Escape helpers ───────────────────────────────────────────────────────
   function escapeHtml(s) {
     return String(s || '')
@@ -1568,11 +1354,12 @@
     return html.replace(/\u0000(\d+)\u0000/g, (_, i) => links[i]);
   }
 
-  // ─── Page init: restore conversation history then cart ────────────────────
+  // ─── Page init: restore conversation history ──────────────────────────────
   async function initPage() {
     buildMenuGrid();
+    // Ask the host page (widget script) for its current cart count.
+    postToHost({ type: 'niabot:ready' });
     await loadHistory();
-    refreshCart();
   }
 
   async function loadHistory() {
@@ -1586,7 +1373,7 @@
 
       // Logged-in customer: the server may return their latest chat from
       // another device, or a fresh sid if this browser's chat belongs to
-      // someone else. Adopt it (refreshCart() runs after this, on the new sid).
+      // someone else. Adopt it.
       if (data.sid && data.sid !== sessionId) {
         sessionId = data.sid;
         localStorage.setItem('npk_session_id', sessionId);
@@ -1609,13 +1396,13 @@
       const welcome = document.getElementById('welcome');
       if (welcome) welcome.remove();
 
-      // Render each message with full product cards and cart actions
+      // Render each message with full product cards
       data.messages.forEach(m => {
         const role = m.role === 'assistant' ? 'bot' : 'user';
         // A stored bare-number reply to an option list is shown as its label.
         const text = role === 'user' ? (activeOptionLabel(m.message) || m.message) : m.message;
-        // user messages never have products; assistant messages carry products + cart_action
-        appendMessage(role, text, m.products || [], m.cart_action || null);
+        // user messages never have products; assistant messages may carry products
+        appendMessage(role, text, m.products || []);
       });
     } catch (e) {
       console.warn('Could not load history:', e);

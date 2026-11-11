@@ -1,6 +1,10 @@
-"""repository.py - Shopping domain persistence: cart, orders, and the unified
-chat history table (conversation_messages), used for both shopping and
-operations turns so /api/history can restore the whole conversation.
+"""repository.py - Shopping domain persistence: per-chat session state
+(cart_sessions - the name is historical) and the unified chat history table
+(conversation_messages), used for both shopping and operations turns so
+/api/history can restore the whole conversation.
+
+There is no cart here: product cards add straight to the host website's
+(Magento) cart through static/niabot-widget.js - see templates/index.html.
 
 Ported from npk_shopping_chatbot/app.py's inline DB helpers, adapted to use
 the shared connection pool (database/connection.py, originally from the
@@ -10,7 +14,6 @@ domains now read/write the same database.
 
 import json
 import decimal
-import uuid
 from datetime import datetime
 
 from database.connection import DatabaseManager
@@ -284,123 +287,3 @@ def get_last_shown_price_range(sid):
     if not prices:
         return None
     return min(prices), max(prices)
-
-
-# ─── Cart ───────────────────────────────────────────────────────────────────
-def get_cart_totals(sid: str):
-    with DatabaseManager() as conn:
-        cur = conn.cursor(dictionary=True)
-        cur.execute(
-            """SELECT product_id, sku, product_name, price, quantity, image_url, category
-               FROM cart_items
-               WHERE session_id=%s
-               ORDER BY added_at ASC""",
-            (sid,),
-        )
-        items = cur.fetchall()
-        cur.close()
-
-    for it in items:
-        it["price"] = to_json_safe(it["price"])
-
-    total = sum(float(it["price"]) * int(it["quantity"]) for it in items)
-    return items, total
-
-
-def add_to_cart(sid, product_id, product_name, price, quantity, sku, image_url, category):
-    # cart_items has a FK to cart_sessions, so make sure the session row
-    # exists first.
-    ensure_cart_session(sid)
-
-    with DatabaseManager() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """INSERT INTO cart_items
-                   (session_id, product_id, sku, product_name, price, quantity, image_url, category)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-               ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)""",
-            (sid, product_id, sku, product_name, price, quantity, image_url, category),
-        )
-        conn.commit()
-        cur.close()
-
-
-def remove_from_cart(sid, product_id):
-    with DatabaseManager() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "DELETE FROM cart_items WHERE session_id=%s AND product_id=%s",
-            (sid, product_id),
-        )
-        conn.commit()
-        cur.close()
-
-
-def clear_cart(sid):
-    with DatabaseManager() as conn:
-        cur = conn.cursor()
-        cur.execute("DELETE FROM cart_items WHERE session_id=%s", (sid,))
-        conn.commit()
-        cur.close()
-
-
-# ─── Orders ───────────────────────────────────────────────────────────────────
-def _generate_order_ref() -> str:
-    return "ORD-" + datetime.now().strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6].upper()
-
-
-def place_order(sid, name, phone, address):
-    with DatabaseManager() as conn:
-        cur = conn.cursor(dictionary=True)
-        cur.execute(
-            "SELECT product_id, sku, product_name, price, quantity FROM cart_items WHERE session_id=%s",
-            (sid,),
-        )
-        items = cur.fetchall()
-
-        if not items:
-            cur.close()
-            return {"success": False, "error": "Your cart is empty"}
-
-        total = sum(float(it["price"]) * int(it["quantity"]) for it in items)
-
-        # order_ref has a UNIQUE constraint; a hex collision is astronomically
-        # unlikely but retry a couple of times rather than erroring out on it.
-        order_id = None
-        order_ref = None
-        for _ in range(3):
-            order_ref = _generate_order_ref()
-            try:
-                cur.execute(
-                    """INSERT INTO orders
-                           (session_id, order_ref, total_amount, status,
-                            customer_name, customer_phone, customer_address)
-                       VALUES (%s, %s, %s, 'confirmed', %s, %s, %s)""",
-                    (sid, order_ref, total, name, phone, address),
-                )
-                order_id = cur.lastrowid
-                break
-            except Exception:
-                conn.rollback()
-                continue
-
-        if order_id is None:
-            cur.close()
-            return {"success": False, "error": "Could not place order, please try again"}
-
-        for it in items:
-            cur.execute(
-                """INSERT INTO order_items (order_id, product_id, sku, product_name, price, quantity)
-                   VALUES (%s, %s, %s, %s, %s, %s)""",
-                (order_id, it["product_id"], it["sku"], it["product_name"], it["price"], it["quantity"]),
-            )
-
-        cur.execute("DELETE FROM cart_items WHERE session_id=%s", (sid,))
-        conn.commit()
-        cur.close()
-
-    return {
-        "success":   True,
-        "order_ref": order_ref,
-        "message":   f"Order {order_ref} placed successfully!",
-    }

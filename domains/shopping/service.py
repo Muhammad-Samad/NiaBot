@@ -278,6 +278,19 @@ def _within_distance_threshold(hits: list) -> list:
     return [h for h in hits if h.get("vector_distance", 0) <= VECTOR_DISTANCE_THRESHOLD]
 
 
+def _in_stock(doc: dict) -> bool:
+    """stock_flag is "true"/"false"; stock_status is 1/0. Unknown = in stock,
+    so a product is never blocked just because the field is missing (the
+    website's add-to-cart still checks stock itself)."""
+    flag = doc.get("stock_flag")
+    if isinstance(flag, str) and flag.strip():
+        return flag.strip().lower() == "true"
+    status = doc.get("stock_status")
+    if status in (None, ""):
+        return True
+    return str(status).strip().lower() not in ("0", "false")
+
+
 def _hits_to_products(hits: list) -> list:
     products = []
     for hit in hits:
@@ -307,6 +320,11 @@ def _hits_to_products(hits: list) -> list:
                 "image_url": str(raw_img or ""),
                 "category": str(raw_cat or ""),
                 "url": str(doc.get("url", doc.get("product_url", "")) or ""),
+                # Magento product type + stock (Ceymox Typesense index): only an
+                # in-stock "simple" product can go straight into the host
+                # website's cart by id; the rest get a "View" link to the site.
+                "type_id": str(doc.get("type_id", "") or ""),
+                "in_stock": _in_stock(doc),
             }
         )
     return products

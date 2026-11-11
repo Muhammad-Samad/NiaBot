@@ -7,7 +7,9 @@ A single Flask app that unifies three previously separate bots into one
 conversation:
 
 - **Shopping** (ported from `npk_shopping_chatbot`) — Typesense-backed
-  product search, cart, and order placement.
+  product search. "+ Add" on a product card puts it straight into the host
+  website's (Magento) cart; NiaBot has no cart or checkout of its own (see
+  "Host website cart" below).
 - **Operations** (ported from `npk_operation_chatbot`) — order tracking,
   complaints, refunds, order modification/cancellation, and general support,
   via an LLM-based intent classifier with a rule-based fallback.
@@ -128,9 +130,9 @@ npk_combine_chatbot/
 │   └── menu.py                # numbered main menu + Policy & FAQ sub-menu
 ├── domains/
 │   ├── shopping/
-│   │   ├── routes.py           # /api/cart/*, /api/order/place, /api/history
+│   │   ├── routes.py           # /api/history
 │   │   ├── service.py          # chat handling logic (was app.py's /api/chat)
-│   │   ├── repository.py       # cart/order/message persistence
+│   │   ├── repository.py       # session/message persistence
 │   │   ├── query_engine.py     # off-topic guard, price parsing, LLM query expansion
 │   │   └── search.py           # Typesense product search
 │   ├── operations/
@@ -154,8 +156,8 @@ npk_combine_chatbot/
 │                              # same ConversationManager this app now calls
 │                              # too)
 ├── templates/index.html       # single chat UI (shopping's UI, extended with
-│                              # a working cart sidebar and an image-attach
-│                              # button for the complaint flow)
+│                              # an image-attach button for the complaint
+│                              # flow and the host-cart "+ Add" bridge)
 └── static/uploads/            # complaint image attachments land here
 ```
 
@@ -344,7 +346,29 @@ diagnostics are at `DEBUG`.
   like real credential values instead of ignore patterns — worth checking
   that project's git history for leaked secrets and rotating any keys that
   may have been committed. This new project's `.gitignore` is a normal one.
-- The original shopping bot's chat UI referenced a cart sidebar in its CSS
-  and JavaScript that was never actually present in the page's HTML (the
-  cart button did nothing). This project's `templates/index.html` includes
-  the missing markup so the cart sidebar actually works.
+- The original shopping bot had its own cart sidebar and `/api/cart/*`,
+  `/api/order/place` endpoints. They are gone: see "Host website cart".
+  The `cart_items`, `orders` and `order_items` tables are no longer written
+  (`cart_sessions` is still used - it holds per-chat state).
+
+## Host website cart
+
+When NiaBot is embedded with `static/niabot-widget.js`, the host page can
+pass `NiaBotSettings.addToCart(item)`. Then:
+
+1. "+ Add" on an in-stock simple product card posts
+   `{type: 'niabot:addToCart', requestId, product_id}` from the iframe to
+   the widget script, which calls `addToCart({product_id, qty: 1, ...})`.
+   The product id is the Magento entity id (Typesense `id`). The host adds
+   it to its own cart with the customer's own session and returns
+   `{ok, message}`, which goes back to the iframe as `niabot:cartResult`.
+2. The host calls `NiaBot('cartCount', n)` whenever its cart changes; the
+   widget forwards it as `niabot:cartCount` and the chat header shows it
+   (display only, not clickable).
+3. Configurable / bundle / out-of-stock products, and every product when
+   NiaBot is opened directly (not embedded) or the host gives no
+   `addToCart`, get a "View" link to the product page instead.
+
+The iframe only talks to the origin passed in `?host=` (set by the widget).
+npk_ae's implementation is in
+`Magento_Theme/templates/html/niabot_widget.phtml` (NaheedSupermarket/Npk theme).
