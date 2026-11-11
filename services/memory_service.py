@@ -38,8 +38,13 @@ from datetime import date
 
 from ai.json_chat import chat_json
 from config.memory import (
-    CUSTOMER_TOKEN_SECRET, MEMORY_CONTEXT_SUMMARIES, MEMORY_ENABLED, MEMORY_IDLE_MINUTES,
-    MEMORY_MAX_FACTS, MEMORY_MODEL, MEMORY_WELCOME_DAYS,
+    CUSTOMER_TOKEN_SECRET,
+    MEMORY_CONTEXT_SUMMARIES,
+    MEMORY_ENABLED,
+    MEMORY_IDLE_MINUTES,
+    MEMORY_MAX_FACTS,
+    MEMORY_MODEL,
+    MEMORY_WELCOME_DAYS,
 )
 from config.shopping import openai_client
 from database.connection import DatabaseManager
@@ -79,7 +84,9 @@ def _verify_customer_token(token) -> str | None:
     customer_id, _, signature = str(token).strip().partition(".")
     if not _CUSTOMER_ID_RE.match(customer_id) or not signature:
         return None
-    expected = hmac.new(CUSTOMER_TOKEN_SECRET.encode(), customer_id.encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(
+        CUSTOMER_TOKEN_SECRET.encode(), customer_id.encode(), hashlib.sha256
+    ).hexdigest()
     return customer_id if hmac.compare_digest(expected, signature.lower()) else None
 
 
@@ -88,8 +95,10 @@ def resolve_customer_key(device_id=None, customer_token=None) -> str | None:
         return None
     customer_id = _verify_customer_token(customer_token)
     if customer_id:
+        print(f"#########cust:{customer_id}")
         return f"cust:{customer_id}"
     if device_id and _DEVICE_ID_RE.match(str(device_id)):
+        print(f"##########dev:{device_id}")
         return f"dev:{device_id}"
     return None
 
@@ -97,7 +106,10 @@ def resolve_customer_key(device_id=None, customer_token=None) -> str | None:
 def link_session(sid: str, customer_key: str | None):
     """Records which customer this session belongs to (cart_sessions row
     must already exist), then checks in the background whether any of the
-    customer's earlier sessions are now finished and need summarizing."""
+    customer's earlier sessions are now finished and need summarizing.
+    A session owned by a verified customer ("cust:") is never re-assigned:
+    a device key can be upgraded to a customer key, but not the reverse, and
+    one customer can't take over another's session on a shared PC."""
     if not customer_key:
         return
     try:
@@ -105,7 +117,9 @@ def link_session(sid: str, customer_key: str | None):
             cur = conn.cursor()
             cur.execute(
                 """UPDATE cart_sessions SET customer_key=%s
-                   WHERE session_id=%s AND (customer_key IS NULL OR customer_key<>%s)""",
+                   WHERE session_id=%s
+                     AND (customer_key IS NULL
+                          OR (customer_key<>%s AND customer_key NOT LIKE 'cust:%%'))""",
                 (customer_key, sid, customer_key),
             )
             conn.commit()
@@ -115,7 +129,10 @@ def link_session(sid: str, customer_key: str | None):
         return
 
     now = time.monotonic()
-    if now - _last_summary_check.get(customer_key, 0) >= _SUMMARY_CHECK_INTERVAL_SECONDS:
+    if (
+        now - _last_summary_check.get(customer_key, 0)
+        >= _SUMMARY_CHECK_INTERVAL_SECONDS
+    ):
         _last_summary_check[customer_key] = now
         _executor.submit(_safe, summarize_pending, customer_key)
 
@@ -131,7 +148,10 @@ def _safe(fn, *args):
 def _load_profile(customer_key: str) -> dict:
     with DatabaseManager() as conn:
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT profile_json FROM chat_customer_memory WHERE customer_key=%s", (customer_key,))
+        cur.execute(
+            "SELECT profile_json FROM chat_customer_memory WHERE customer_key=%s",
+            (customer_key,),
+        )
         row = cur.fetchone()
         cur.close()
     try:
@@ -195,7 +215,10 @@ def get_context(customer_key: str | None) -> dict | None:
     if not customer_key:
         return None
     try:
-        facts = [f"{f['text']} (noted {f.get('noted', '')[:7]})" for f in _load_profile(customer_key)["facts"]]
+        facts = [
+            f"{f['text']} (noted {f.get('noted', '')[:7]})"
+            for f in _load_profile(customer_key)["facts"]
+        ]
         with DatabaseManager() as conn:
             cur = conn.cursor(dictionary=True)
             cur.execute(
@@ -205,7 +228,10 @@ def get_context(customer_key: str | None) -> dict | None:
             )
             rows = cur.fetchall()
             cur.close()
-        past = [{"date": _topics(r).get("last_active", ""), "summary": r["summary"]} for r in rows]
+        past = [
+            {"date": _topics(r).get("last_active", ""), "summary": r["summary"]}
+            for r in rows
+        ]
         return {"facts": facts, "past": past} if (facts or past) else None
     except Exception as e:
         logger.error(f"[memory] Failed to load context for {customer_key}: {e}")
@@ -294,7 +320,9 @@ def _transcript(sid: str) -> str:
         cur.close()
     # Cart/order tables come from SQL_SETUP.sql and aren't present on every
     # install — the transcript is still worth summarizing without them.
-    cart = _optional_names("SELECT product_name FROM cart_items WHERE session_id=%s", sid)
+    cart = _optional_names(
+        "SELECT product_name FROM cart_items WHERE session_id=%s", sid
+    )
     ordered = _optional_names(
         """SELECT oi.product_name FROM orders o JOIN order_items oi ON oi.order_id = o.id
            WHERE o.session_id=%s""",
@@ -307,7 +335,9 @@ def _transcript(sid: str) -> str:
         line = f"{'customer' if m['role'] == 'user' else 'assistant'}: {text}"
         try:
             products = json.loads(m["products_json"]) if m["products_json"] else []
-            names = [p.get("product_name", "") for p in products if isinstance(p, dict)][:5]
+            names = [
+                p.get("product_name", "") for p in products if isinstance(p, dict)
+            ][:5]
         except (TypeError, ValueError):
             names = []
         if names:
@@ -327,12 +357,23 @@ def _summarize_session(customer_key: str, row: dict):
     profile = _load_profile(customer_key)
     existing = profile["facts"]
     user = (
-        "## Existing facts\n" + ("\n".join(f"- {f['text']}" for f in existing) or "(none)")
+        "## Existing facts\n"
+        + ("\n".join(f"- {f['text']}" for f in existing) or "(none)")
         + f"\n\n## Transcript (session date {row['last_active']})\n{transcript}"
     )
-    result = chat_json(openai_client, MEMORY_MODEL, _SUMMARY_PROMPT, user, max_tokens=700, temperature=0)
+    result = chat_json(
+        openai_client,
+        MEMORY_MODEL,
+        _SUMMARY_PROMPT,
+        user,
+        max_tokens=700,
+        temperature=0,
+    )
 
-    summary = " ".join(str(result.get("summary") or "").split()) or "Short chat with no shopping details."
+    summary = (
+        " ".join(str(result.get("summary") or "").split())
+        or "Short chat with no shopping details."
+    )
     topics = {
         "topics": [str(t) for t in (result.get("topics") or [])][:8],
         "resume_hint": result.get("resume_hint") or None,
@@ -347,12 +388,20 @@ def _summarize_session(customer_key: str, row: dict):
                VALUES (%s, %s, %s, %s, %s) AS new
                ON DUPLICATE KEY UPDATE customer_key = new.customer_key, summary = new.summary,
                    topics_json = new.topics_json, last_message_id = new.last_message_id""",
-            (customer_key, row["session_id"], summary, json.dumps(topics, ensure_ascii=False), row["last_id"]),
+            (
+                customer_key,
+                row["session_id"],
+                summary,
+                json.dumps(topics, ensure_ascii=False),
+                row["last_id"],
+            ),
         )
         conn.commit()
         cur.close()
 
-    facts = [" ".join(str(f).split()) for f in (result.get("facts") or []) if str(f).strip()]
+    facts = [
+        " ".join(str(f).split()) for f in (result.get("facts") or []) if str(f).strip()
+    ]
     if facts:
         with _lock_for(customer_key):
             # Re-read: a live fact may have been added while the LLM ran.
@@ -371,7 +420,9 @@ def summarize_pending(customer_key: str, limit: int = 3):
             try:
                 _summarize_session(customer_key, row)
             except Exception as e:
-                logger.exception(f"[memory] Failed to summarize session {row['session_id']}: {e}")
+                logger.exception(
+                    f"[memory] Failed to summarize session {row['session_id']}: {e}"
+                )
 
 
 # ─── Welcome back ──────────────────────────────────────────────────────────────
@@ -412,7 +463,10 @@ def welcome(customer_key: str | None) -> dict | None:
         message = f"Welcome back! Last time you were looking at {hint}. Want to pick up where you left off?"
     else:
         message = "Welcome back! Good to see you again."
-    return {"message": message, "resume_prompt": topics.get("resume_prompt") if hint else None}
+    return {
+        "message": message,
+        "resume_prompt": topics.get("resume_prompt") if hint else None,
+    }
 
 
 # ─── Forget ────────────────────────────────────────────────────────────────────
@@ -425,8 +479,14 @@ def forget(customer_key: str | None) -> bool:
     with _lock_for(customer_key):
         with DatabaseManager() as conn:
             cur = conn.cursor()
-            cur.execute("DELETE FROM chat_customer_memory WHERE customer_key=%s", (customer_key,))
-            cur.execute("DELETE FROM chat_conversation_summaries WHERE customer_key=%s", (customer_key,))
+            cur.execute(
+                "DELETE FROM chat_customer_memory WHERE customer_key=%s",
+                (customer_key,),
+            )
+            cur.execute(
+                "DELETE FROM chat_conversation_summaries WHERE customer_key=%s",
+                (customer_key,),
+            )
             # Unlinking stops these sessions from being summarized again.
             cur.execute(
                 "UPDATE cart_sessions SET conversation_state=NULL, customer_key=NULL WHERE customer_key=%s",

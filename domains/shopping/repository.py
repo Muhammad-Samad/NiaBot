@@ -77,6 +77,35 @@ def save_conversation_message(sid, conversation_id, role, message, products=None
         logger.error(f"Failed to save conversation message for session {sid}: {e}")
 
 
+def session_owner(sid):
+    """cart_sessions.customer_key for this sid ("cust:..." / "dev:..."), or None."""
+    with DatabaseManager() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT customer_key FROM cart_sessions WHERE session_id=%s", (sid,))
+        row = cur.fetchone()
+        cur.close()
+    return row["customer_key"] if row else None
+
+
+def latest_session_for(customer_key):
+    """The customer's session with the newest message (any device), or None."""
+    with DatabaseManager() as conn:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            """SELECT cs.session_id
+               FROM cart_sessions cs
+               JOIN conversation_messages cm ON cm.session_id = cs.session_id
+               WHERE cs.customer_key = %s
+               GROUP BY cs.session_id
+               ORDER BY MAX(cm.id) DESC
+               LIMIT 1""",
+            (customer_key,),
+        )
+        row = cur.fetchone()
+        cur.close()
+    return row["session_id"] if row else None
+
+
 def get_history(sid):
     with DatabaseManager() as conn:
         cur = conn.cursor(dictionary=True)

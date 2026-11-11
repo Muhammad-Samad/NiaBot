@@ -89,6 +89,14 @@ def chat():
     # Long-term memory identity: a signed logged-in customer id from the host
     # site, else the browser's device id (survives "New Chat").
     customer_key = memory_service.resolve_customer_key(data.get("device_id"), data.get("customer_token"))
+
+    # Shared PC: never let one verified customer write into another's session.
+    # /api/history normally swaps the sid first; this catches anything that slips past.
+    if customer_key and customer_key.startswith("cust:"):
+        owner = shopping_repository.session_owner(sid)
+        if owner and owner.startswith("cust:") and owner != customer_key:
+            return jsonify({"error": "Your session has changed, please reload the page."}), 409
+
     memory_service.link_session(sid, customer_key)
 
     result = domain_router.route_message(sid, user_msg, client_conv_id, customer_key=customer_key)

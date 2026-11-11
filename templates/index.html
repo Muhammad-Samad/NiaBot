@@ -822,7 +822,9 @@
     }
     return sid;
   }
-  const sessionId = getSessionId();
+  // let: /api/history may hand back a different sid for a logged-in customer
+  // (their latest chat from another device) and loadHistory() adopts it.
+  let sessionId = getSessionId();
 
   // ─── Long-term memory identity ─────────────────────────────────────────────
   // device_id lives as long as the browser profile — "New Chat" keeps it, so
@@ -858,6 +860,9 @@
       : 'sid-' + Date.now() + '-' + Math.random().toString(36).slice(2));
     localStorage.setItem('npk_session_id', newSid);
     localStorage.removeItem('npk_conversation_id');
+    // Keeps /api/history from swapping this fresh chat for the customer's
+    // previous one; cleared once the new chat has its first message.
+    localStorage.setItem('npk_new_chat', '1');
     location.reload();
   }
 
@@ -1036,6 +1041,7 @@
       } else {
         conversationId = data.conversation_id || conversationId;
         localStorage.setItem('npk_conversation_id', conversationId);
+        localStorage.removeItem('npk_new_chat');
 
         appendMessage('bot', data.answer, data.products, data.cart_action);
         if (data.cart_action?.type === 'added') refreshCart();
@@ -1571,8 +1577,23 @@
 
   async function loadHistory() {
     try {
-      const res  = await fetch('/api/history?sid=' + encodeURIComponent(sessionId));
+      const params = new URLSearchParams({ sid: sessionId });
+      if (customerToken) params.set('ct', customerToken);
+      if (localStorage.getItem('npk_new_chat') === '1') params.set('new_chat', '1');
+
+      const res  = await fetch('/api/history?' + params);
       const data = await res.json();
+
+      // Logged-in customer: the server may return their latest chat from
+      // another device, or a fresh sid if this browser's chat belongs to
+      // someone else. Adopt it (refreshCart() runs after this, on the new sid).
+      if (data.sid && data.sid !== sessionId) {
+        sessionId = data.sid;
+        localStorage.setItem('npk_session_id', sessionId);
+        localStorage.removeItem('npk_conversation_id');
+        localStorage.removeItem('npk_new_chat');
+        conversationId = null;
+      }
       if (!data.messages || data.messages.length === 0) {
         loadWelcomeBack();
         return;
