@@ -64,9 +64,9 @@ def handle_message(
     # Typesense conversation_id exists yet — never sent to Typesense itself.
     tracking_conv_id = client_conv_id or str(uuid.uuid4())
 
-    # Register/refresh the cart_session row up front so it exists for every
+    # Register/refresh the ncb_bot_sessions row up front so it exists for every
     # branch below, not just the "products found" path.
-    repository.ensure_cart_session(sid, tracking_conv_id)
+    repository.ensure_bot_session(sid, tracking_conv_id)
 
     ack_msg, ack_response = query_engine.is_acknowledgement(user_msg)
     if ack_msg:
@@ -197,7 +197,7 @@ def _search_turn(sid, user_msg, turn, state, history, tracking_conv_id) -> dict:
 
     new_conv_id = (conversation_result or {}).get("conversation_id") or tracking_conv_id
     if new_conv_id != tracking_conv_id:
-        repository.ensure_cart_session(sid, new_conv_id)
+        repository.ensure_bot_session(sid, new_conv_id)
 
     print(f"=======> before applying distance_threshold {len(hits)}")
     hits = _within_distance_threshold(hits)
@@ -393,7 +393,7 @@ def _handle_single_message(sid, user_msg, client_conv_id, tracking_conv_id) -> d
 
     new_conv_id = (conversation_result or {}).get("conversation_id") or tracking_conv_id
     if new_conv_id != tracking_conv_id:
-        repository.ensure_cart_session(sid, new_conv_id)
+        repository.ensure_bot_session(sid, new_conv_id)
 
     hits = _within_distance_threshold(hits)
     if hits:

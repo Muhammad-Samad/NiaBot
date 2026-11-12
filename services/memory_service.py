@@ -2,13 +2,13 @@
 
 Three layers (see migrations/add_conversation_memory.sql):
   * short-term  – the last few messages + structured need of the CURRENT
-                  session (domains/shopping: conversation_messages,
-                  cart_sessions.conversation_state). Not handled here.
-  * summaries   – chat_conversation_summaries: one rolling summary per past
+                  session (domains/shopping: ncb_conversation_messages,
+                  ncb_bot_sessions.conversation_state). Not handled here.
+  * summaries   – ncb_chat_conversation_summaries: one rolling summary per past
                   session (sid), written once it has been idle for
                   MEMORY_IDLE_MINUTES. Drives "welcome back" and lets the
                   conversation model answer "what did I look at last time?".
-  * facts       – chat_customer_memory.profile_json: durable facts about the
+  * facts       – ncb_chat_customer_memory.profile_json: durable facts about the
                   customer ("Has a son, about 25 years old", "prefers Nike"),
                   added live by the conversation model and consolidated
                   (deduped, conflicts resolved) whenever a session is
@@ -103,8 +103,24 @@ def resolve_customer_key(device_id=None, customer_token=None) -> str | None:
     return None
 
 
+_MAX_UNSIGNED_INT = 4294967295
+
+
+def customer_id_from_key(customer_key: str | None) -> int | None:
+    """The numeric customer id inside a verified "cust:<id>" key, for the
+    integer `customer_id` columns. None for device keys, missing keys and
+    non-numeric or out-of-range ids."""
+    if not customer_key or not customer_key.startswith("cust:"):
+        return None
+    raw = customer_key[len("cust:"):]
+    if not raw.isdigit():
+        return None
+    value = int(raw)
+    return value if 0 < value <= _MAX_UNSIGNED_INT else None
+
+
 def link_session(sid: str, customer_key: str | None):
-    """Records which customer this session belongs to (cart_sessions row
+    """Records which customer this session belongs to (ncb_bot_sessions row
     must already exist), then checks in the background whether any of the
     customer's earlier sessions are now finished and need summarizing.
     A session owned by a verified customer ("cust:") is never re-assigned:
@@ -116,11 +132,11 @@ def link_session(sid: str, customer_key: str | None):
         with DatabaseManager() as conn:
             cur = conn.cursor()
             cur.execute(
-                """UPDATE cart_sessions SET customer_key=%s
+                """UPDATE ncb_bot_sessions SET customer_key=%s, customer_id=%s
                    WHERE session_id=%s
                      AND (customer_key IS NULL
                           OR (customer_key<>%s AND customer_key NOT LIKE 'cust:%%'))""",
-                (customer_key, sid, customer_key),
+                (customer_key, customer_id_from_key(customer_key), sid, customer_key),
             )
             conn.commit()
             cur.close()
@@ -149,7 +165,7 @@ def _load_profile(customer_key: str) -> dict:
     with DatabaseManager() as conn:
         cur = conn.cursor(dictionary=True)
         cur.execute(
-            "SELECT profile_json FROM chat_customer_memory WHERE customer_key=%s",
+            "SELECT profile_json FROM ncb_chat_customer_memory WHERE customer_key=%s",
             (customer_key,),
         )
         row = cur.fetchone()
@@ -168,7 +184,7 @@ def _save_profile(customer_key: str, profile: dict):
     with DatabaseManager() as conn:
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO chat_customer_memory (customer_key, profile_json) VALUES (%s, %s) AS new
+            """INSERT INTO ncb_chat_customer_memory (customer_key, profile_json) VALUES (%s, %s) AS new
                ON DUPLICATE KEY UPDATE profile_json = new.profile_json""",
             (customer_key, json.dumps(profile, ensure_ascii=False)),
         )
@@ -222,7 +238,7 @@ def get_context(customer_key: str | None) -> dict | None:
         with DatabaseManager() as conn:
             cur = conn.cursor(dictionary=True)
             cur.execute(
-                """SELECT summary, topics_json FROM chat_conversation_summaries
+                """SELECT summary, topics_json FROM ncb_chat_conversation_summaries
                    WHERE customer_key=%s ORDER BY last_message_id DESC LIMIT %s""",
                 (customer_key, MEMORY_CONTEXT_SUMMARIES),
             )
@@ -279,9 +295,9 @@ def _pending_sessions(customer_key: str, limit: int) -> list[dict]:
         cur = conn.cursor(dictionary=True)
         cur.execute(
             """SELECT cs.session_id, MAX(cm.id) AS last_id, DATE(MAX(cm.created_at)) AS last_active
-               FROM cart_sessions cs
-               JOIN conversation_messages cm ON cm.session_id = cs.session_id
-               LEFT JOIN chat_conversation_summaries s ON s.session_id = cs.session_id
+               FROM ncb_bot_sessions cs
+               JOIN ncb_conversation_messages cm ON cm.session_id = cs.session_id
+               LEFT JOIN ncb_chat_conversation_summaries s ON s.session_id = cs.session_id
                WHERE cs.customer_key = %s
                GROUP BY cs.session_id, s.last_message_id
                HAVING MAX(cm.id) > COALESCE(s.last_message_id, 0)
@@ -312,7 +328,7 @@ def _transcript(sid: str) -> str:
     with DatabaseManager() as conn:
         cur = conn.cursor(dictionary=True)
         cur.execute(
-            """SELECT role, message, products_json FROM conversation_messages
+            """SELECT role, message, products_json FROM ncb_conversation_messages
                WHERE session_id=%s ORDER BY id DESC LIMIT %s""",
             (sid, _SUMMARY_MAX_MESSAGES),
         )
@@ -321,10 +337,10 @@ def _transcript(sid: str) -> str:
     # Cart/order tables come from SQL_SETUP.sql and aren't present on every
     # install — the transcript is still worth summarizing without them.
     cart = _optional_names(
-        "SELECT product_name FROM cart_items WHERE session_id=%s", sid
+        "SELECT product_name FROM ncb_cart_items WHERE session_id=%s", sid
     )
     ordered = _optional_names(
-        """SELECT oi.product_name FROM orders o JOIN order_items oi ON oi.order_id = o.id
+        """SELECT oi.product_name FROM ncb_orders o JOIN ncb_order_items oi ON oi.order_id = o.id
            WHERE o.session_id=%s""",
         sid,
     )
@@ -383,7 +399,7 @@ def _summarize_session(customer_key: str, row: dict):
     with DatabaseManager() as conn:
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO chat_conversation_summaries
+            """INSERT INTO ncb_chat_conversation_summaries
                    (customer_key, session_id, summary, topics_json, last_message_id)
                VALUES (%s, %s, %s, %s, %s) AS new
                ON DUPLICATE KEY UPDATE customer_key = new.customer_key, summary = new.summary,
@@ -438,7 +454,7 @@ def welcome(customer_key: str | None) -> dict | None:
         with DatabaseManager() as conn:
             cur = conn.cursor(dictionary=True)
             cur.execute(
-                """SELECT topics_json FROM chat_conversation_summaries
+                """SELECT topics_json FROM ncb_chat_conversation_summaries
                    WHERE customer_key=%s ORDER BY last_message_id DESC LIMIT 1""",
                 (customer_key,),
             )
@@ -473,23 +489,24 @@ def welcome(customer_key: str | None) -> dict | None:
 def forget(customer_key: str | None) -> bool:
     """Deletes everything remembered about this customer (facts, summaries,
     per-session need state) and unlinks their sessions. Chat transcripts
-    (conversation_messages) are left as they are."""
+    (ncb_conversation_messages, ncb_intent_logs) are left as they are."""
     if not customer_key:
         return False
     with _lock_for(customer_key):
         with DatabaseManager() as conn:
             cur = conn.cursor()
             cur.execute(
-                "DELETE FROM chat_customer_memory WHERE customer_key=%s",
+                "DELETE FROM ncb_chat_customer_memory WHERE customer_key=%s",
                 (customer_key,),
             )
             cur.execute(
-                "DELETE FROM chat_conversation_summaries WHERE customer_key=%s",
+                "DELETE FROM ncb_chat_conversation_summaries WHERE customer_key=%s",
                 (customer_key,),
             )
             # Unlinking stops these sessions from being summarized again.
             cur.execute(
-                "UPDATE cart_sessions SET conversation_state=NULL, customer_key=NULL WHERE customer_key=%s",
+                "UPDATE ncb_bot_sessions SET conversation_state=NULL, customer_key=NULL, customer_id=NULL"
+                " WHERE customer_key=%s",
                 (customer_key,),
             )
             conn.commit()

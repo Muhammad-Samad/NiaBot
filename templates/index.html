@@ -469,7 +469,8 @@
   .add-btn:hover { background: var(--brand-red-dk); }
   .add-btn:disabled { opacity: .7; cursor: default; }
   .add-btn.added, .add-btn.added:hover { background: var(--accent-green); }
-  a.add-btn { text-decoration: none; display: inline-block; }
+  /* "View" link: beat .bubble.bot a (red link colour = invisible on the red button) */
+  .bubble.bot a.add-btn { color: #fff; text-decoration: none; display: inline-block; word-break: normal; }
 
   /* ─── Input bar ─── */
   .input-bar {

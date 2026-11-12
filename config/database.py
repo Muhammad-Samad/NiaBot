@@ -1,11 +1,11 @@
 """database.py - Single shared MySQL database configuration.
 
-Both domains (shopping and operations) read and write the SAME database, on
-the assumption that it contains both the shopping schema (cart_sessions,
-cart_items, orders, order_items, conversation_messages) and the Magento
-order-tracking schema the operations flows query (sales_order and friends),
-plus operations' own tables (audit log, complaint tickets, conversation
-history). This module owns the connection settings; database/connection.py
+All domains read and write the SAME database, on the assumption that it
+contains both NiaBot's own tables (all prefixed ncb_: ncb_bot_sessions,
+ncb_conversation_messages, ncb_conversation_sessions, ncb_intent_logs,
+ncb_audit_logs, memory tables - see SQL_SETUP.sql and migrations/) and the
+Magento schema the operations flows query (sales_order and friends,
+complaint tickets). This module owns the connection settings; database/connection.py
 (the shared MySQLConnectionPool + DatabaseManager context manager, ported
 from the operations bot) is the only thing that imports from here.
 """

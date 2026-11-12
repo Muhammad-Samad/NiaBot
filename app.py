@@ -84,7 +84,7 @@ def chat():
      real conversation id (e.g. the very first message of a session is an
      operations query like "track order 123456")."""
     fallback_conv_id = client_conv_id or str(uuid.uuid4())
-    shopping_repository.ensure_cart_session(sid, fallback_conv_id)
+    shopping_repository.ensure_bot_session(sid, fallback_conv_id)
 
     # Long-term memory identity: a signed logged-in customer id from the host
     # site, else the browser's device id (survives "New Chat").
@@ -103,10 +103,14 @@ def chat():
     conversation_id = result.get("conversation_id") or fallback_conv_id
 
     domain = result.get("domain")
-    shopping_repository.save_conversation_message(sid, conversation_id, "user", user_msg, domain=domain)
+    customer_id = memory_service.customer_id_from_key(customer_key)
+    shopping_repository.save_conversation_message(
+        sid, conversation_id, "user", user_msg, domain=domain, customer_id=customer_id,
+    )
     shopping_repository.save_conversation_message(
         sid, conversation_id, "assistant", result["answer"],
         products=result.get("products"), cart_action=result.get("cart_action"), domain=domain,
+        customer_id=customer_id,
     )
 
     return jsonify({
@@ -128,7 +132,7 @@ def welcome():
     customer_key = memory_service.resolve_customer_key(data.get("device_id"), data.get("customer_token"))
     if not sid or not customer_key:
         return jsonify({})
-    shopping_repository.ensure_cart_session(sid)
+    shopping_repository.ensure_bot_session(sid)
     memory_service.link_session(sid, customer_key)
     return jsonify(memory_service.welcome(customer_key) or {})
 

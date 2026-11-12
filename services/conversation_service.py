@@ -42,6 +42,7 @@ class ConversationService:
                 if internal_id is not None:
                     self.repository.save_message(
                         conversation_id=internal_id,
+                        session_id=session_id,
                         sender='user',
                         message=message,
                         message_type=message_type,
@@ -67,6 +68,7 @@ class ConversationService:
                 if internal_id is not None:
                     self.repository.save_message(
                         conversation_id=internal_id,
+                        session_id=session_id,
                         sender='assistant',
                         message=message,
                         metadata=metadata

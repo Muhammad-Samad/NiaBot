@@ -1,7 +1,11 @@
 """repository.py - Shopping domain persistence: per-chat session state
-(cart_sessions - the name is historical) and the unified chat history table
-(conversation_messages), used for both shopping and operations turns so
-/api/history can restore the whole conversation.
+(ncb_bot_sessions) and the unified chat history table
+(ncb_conversation_messages), used for every domain's turns so /api/history
+can restore the whole conversation.
+
+`ts_conversation_id` is Typesense's conversational-search thread id (or the
+fallback id app.py mints when no domain produced one). `customer_id` is the
+numeric Naheed customer id of a verified logged-in customer, else NULL.
 
 There is no cart here: product cards add straight to the host website's
 (Magento) cart through static/niabot-widget.js - see templates/index.html.
@@ -34,37 +38,40 @@ def to_json_safe(val):
 
 
 # ─── Session / conversation bookkeeping ───────────────────────────────────────
-def ensure_cart_session(sid, conversation_id=None):
+def ensure_bot_session(sid, ts_conversation_id=None):
     with DatabaseManager() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT IGNORE INTO cart_sessions (session_id, conversation_id) VALUES (%s, %s)",
-            (sid, conversation_id),
+            "INSERT IGNORE INTO ncb_bot_sessions (session_id, ts_conversation_id) VALUES (%s, %s)",
+            (sid, ts_conversation_id),
         )
-        if conversation_id:
+        if ts_conversation_id:
             cur.execute(
-                "UPDATE cart_sessions SET conversation_id=%s WHERE session_id=%s",
-                (conversation_id, sid),
+                "UPDATE ncb_bot_sessions SET ts_conversation_id=%s WHERE session_id=%s",
+                (ts_conversation_id, sid),
             )
         conn.commit()
         cur.close()
 
 
-def save_conversation_message(sid, conversation_id, role, message, products=None, cart_action=None, domain=None):
+def save_conversation_message(sid, ts_conversation_id, role, message, products=None, cart_action=None,
+                              domain=None, customer_id=None):
     """Persist one chat turn (user or assistant), from ANY domain, so
     /api/history can restore the full unified chat UI on page reload.
     `domain` is the domain that handled the turn (shopping / operations /
-    policy / menu)."""
+    policy / menu); `customer_id` the verified numeric customer id or None."""
     try:
         with DatabaseManager() as conn:
             cur = conn.cursor()
             cur.execute(
-                """INSERT INTO conversation_messages
-                       (session_id, conversation_id, role, message, products_json, cart_action_json, domain)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                """INSERT INTO ncb_conversation_messages
+                       (session_id, ts_conversation_id, customer_id, role, message,
+                        products_json, cart_action_json, domain)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
                 (
                     sid,
-                    conversation_id,
+                    ts_conversation_id,
+                    customer_id,
                     role,
                     message,
                     json.dumps(products) if products else None,
@@ -81,10 +88,10 @@ def save_conversation_message(sid, conversation_id, role, message, products=None
 
 
 def session_owner(sid):
-    """cart_sessions.customer_key for this sid ("cust:..." / "dev:..."), or None."""
+    """ncb_bot_sessions.customer_key for this sid ("cust:..." / "dev:..."), or None."""
     with DatabaseManager() as conn:
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT customer_key FROM cart_sessions WHERE session_id=%s", (sid,))
+        cur.execute("SELECT customer_key FROM ncb_bot_sessions WHERE session_id=%s", (sid,))
         row = cur.fetchone()
         cur.close()
     return row["customer_key"] if row else None
@@ -96,8 +103,8 @@ def latest_session_for(customer_key):
         cur = conn.cursor(dictionary=True)
         cur.execute(
             """SELECT cs.session_id
-               FROM cart_sessions cs
-               JOIN conversation_messages cm ON cm.session_id = cs.session_id
+               FROM ncb_bot_sessions cs
+               JOIN ncb_conversation_messages cm ON cm.session_id = cs.session_id
                WHERE cs.customer_key = %s
                GROUP BY cs.session_id
                ORDER BY MAX(cm.id) DESC
@@ -113,15 +120,15 @@ def get_history(sid):
     with DatabaseManager() as conn:
         cur = conn.cursor(dictionary=True)
         cur.execute(
-            "SELECT conversation_id FROM cart_sessions WHERE session_id=%s",
+            "SELECT ts_conversation_id FROM ncb_bot_sessions WHERE session_id=%s",
             (sid,),
         )
         row = cur.fetchone()
-        conversation_id = row["conversation_id"] if row else None
+        conversation_id = row["ts_conversation_id"] if row else None
 
         cur.execute(
             """SELECT role, message, products_json, cart_action_json
-               FROM conversation_messages
+               FROM ncb_conversation_messages
                WHERE session_id=%s
                ORDER BY id ASC""",
             (sid,),
@@ -155,7 +162,7 @@ def get_last_shown_products(sid):
     with DatabaseManager() as conn:
         cur = conn.cursor(dictionary=True)
         cur.execute(
-            """SELECT products_json FROM conversation_messages
+            """SELECT products_json FROM ncb_conversation_messages
                WHERE session_id=%s AND role='assistant' AND products_json IS NOT NULL
                ORDER BY id DESC LIMIT 1""",
             (sid,),
@@ -174,7 +181,7 @@ def get_last_shown_products(sid):
 def get_last_topic(sid):
     with DatabaseManager() as conn:
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT last_topic FROM cart_sessions WHERE session_id=%s", (sid,))
+        cur.execute("SELECT last_topic FROM ncb_bot_sessions WHERE session_id=%s", (sid,))
         row = cur.fetchone()
         cur.close()
     return (row or {}).get("last_topic") or None
@@ -184,7 +191,7 @@ def set_last_topic(sid, topic):
     with DatabaseManager() as conn:
         cur = conn.cursor()
         cur.execute(
-            "UPDATE cart_sessions SET last_topic=%s WHERE session_id=%s",
+            "UPDATE ncb_bot_sessions SET last_topic=%s WHERE session_id=%s",
             (topic[:512], sid),
         )
         conn.commit()
@@ -197,7 +204,7 @@ def get_conversation_state(sid) -> dict:
     try:
         with DatabaseManager() as conn:
             cur = conn.cursor(dictionary=True)
-            cur.execute("SELECT conversation_state FROM cart_sessions WHERE session_id=%s", (sid,))
+            cur.execute("SELECT conversation_state FROM ncb_bot_sessions WHERE session_id=%s", (sid,))
             row = cur.fetchone()
             cur.close()
         raw = (row or {}).get("conversation_state")
@@ -213,7 +220,7 @@ def set_conversation_state(sid, state: dict):
         with DatabaseManager() as conn:
             cur = conn.cursor()
             cur.execute(
-                "UPDATE cart_sessions SET conversation_state=%s WHERE session_id=%s",
+                "UPDATE ncb_bot_sessions SET conversation_state=%s WHERE session_id=%s",
                 (json.dumps(state, ensure_ascii=False), sid),
             )
             conn.commit()
@@ -233,7 +240,7 @@ def get_recent_messages(sid, limit: int):
             # stamped created_at, so app-server timezone can't skew it.
             """SELECT id, role, message, products_json, domain, created_at,
                       TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age_minutes
-               FROM conversation_messages
+               FROM ncb_conversation_messages
                WHERE session_id=%s
                ORDER BY id DESC LIMIT %s""",
             (sid, limit),
@@ -265,7 +272,7 @@ def get_recently_shown_product_ids(sid, turns: int = 3) -> set:
     with DatabaseManager() as conn:
         cur = conn.cursor(dictionary=True)
         cur.execute(
-            """SELECT products_json FROM conversation_messages
+            """SELECT products_json FROM ncb_conversation_messages
                WHERE session_id=%s AND role='assistant' AND products_json IS NOT NULL
                ORDER BY id DESC LIMIT %s""",
             (sid, turns),

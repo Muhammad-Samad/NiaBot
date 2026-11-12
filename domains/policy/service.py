@@ -15,8 +15,8 @@ Reached from three places:
     classifies a message as `general_policy` (its `policy_rag` tool).
 
 Persistence: like an operations turn, every policy turn is written to
-chatbot_messages through ConversationService (with the RAG sources in
-`metadata`), on top of the conversation_messages row app.py writes for every
+ncb_intent_logs through ConversationService (with the RAG sources in
+`metadata`), on top of the ncb_conversation_messages row app.py writes for every
 turn. ask() leaves persistence to the caller, which is how the operations
 path saves the turn itself.
 """

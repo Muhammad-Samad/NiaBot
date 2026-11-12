@@ -30,11 +30,12 @@ together" section below for details.
 - Python 3.11+ (the operations code uses `str | None` type hints, which need
   3.10+)
 - A MySQL database containing **both** schemas:
-  - the shopping schema: `cart_sessions`, `cart_items`, `orders`,
-    `order_items`, `conversation_messages`, plus `conversation_sessions` /
-    `chatbot_messages` (see `SQL_SETUP.sql` for the DDL; existing installs
-    must run `migrations/add_policy_domain_columns.sql` — see "Policy
-    domain" below)
+  - NiaBot's own tables, all prefixed `ncb_`: `ncb_bot_sessions`,
+    `ncb_conversation_messages`, `ncb_conversation_sessions`,
+    `ncb_intent_logs`, `ncb_audit_logs`, the memory tables, and the legacy
+    `ncb_cart_items` / `ncb_orders` / `ncb_order_items` (see `SQL_SETUP.sql`
+    for the DDL; existing installs must run the files in `migrations/` — see
+    "Policy domain" below — and [docs/DATABASE.md](docs/DATABASE.md))
   - the Magento order-tracking schema the operations flows query
     (`sales_order`, `sales_order_item`, `sales_order_address`,
     `sales_order_payment`, `sales_creditmemo`, `nhd_sales_order_additionals`,
@@ -219,7 +220,7 @@ with every `/api/chat` call and used as the identity key for *both* domains
 — shopping's cart/conversation state and operations' `StateManager` state.
 This is what lets a user move from "show me shoes" to "track my order" in
 the same chat thread. Every turn, regardless of which domain handled it, is
-persisted to the same `conversation_messages` table (with a `domain`
+persisted to the same `ncb_conversation_messages` table (with a `domain`
 column: `shopping` / `operations` / `policy` / `menu`), so `/api/history`
 restores the full mixed conversation on page reload.
 
@@ -229,7 +230,7 @@ restores the full mixed conversation on page reload.
 every shopping message goes through one LLM call
 (`SHOPPING_CONVERSATION_MODEL`) that sees the last
 `SHOPPING_HISTORY_MESSAGES` messages from every domain, the structured need so
-far (`cart_sessions.conversation_state`), the products on screen, and the
+far (`ncb_bot_sessions.conversation_state`), the products on screen, and the
 customer's long-term memory. The call returns the turn type (`new`, `refine`,
 `correct`, `more`, `reference`, `recall`, `smalltalk`), an action (`search`,
 `answer`, `clarify`, `off_topic`), the **full updated need**, a fresh
@@ -249,8 +250,8 @@ key, not by `sid`, because "New Chat" mints a new `sid`:
   `window.NIABOT_CUSTOMER_TOKEN` or `?ct=`. Unsigned ids are never trusted.
 
 Once a session has been idle for `MEMORY_IDLE_MINUTES`, it is summarized into
-`chat_conversation_summaries`. Durable facts ("Has a son, about 25 years old")
-live in `chat_customer_memory`; they are added live and consolidated at
+`ncb_chat_conversation_summaries`. Durable facts ("Has a son, about 25 years old")
+live in `ncb_chat_customer_memory`; they are added live and consolidated at
 summary time. When a returning customer opens a fresh chat, `/api/welcome`
 offers to continue their last shopping need. `POST /api/memory/forget` deletes
 the customer's memory. Schema: `migrations/add_conversation_memory.sql`.
@@ -297,8 +298,8 @@ In Docker the index is baked into the image, so rebuild the image after
 re-ingesting.
 
 **Persistence:** every policy turn is saved like an operations turn — to
-`conversation_messages` (by `app.py`, `domain='policy'`) and to
-`chatbot_messages` (`intent='policy_query'`, `flow_name='policy'`). The
+`ncb_conversation_messages` (by `app.py`, `domain='policy'`) and to
+`ncb_intent_logs` (`intent='policy_query'`, `flow_name='policy'`). The
 assistant row's `metadata` JSON holds the RAG details: `entry` (how the
 message reached the policy domain: `free_text`, `mid_flow`, `policy_menu`,
 `shopping_off_topic`, `operations_intent`), `model`, `grounded`,
@@ -309,8 +310,8 @@ and the same metadata.
 
 **Database changes:** run `migrations/add_policy_domain_columns.sql` on
 existing databases **before** deploying this version — it adds
-`conversation_messages.domain` (written for every turn) and
-`conversation_sessions.ended_at` (written when a session closes).
+`ncb_conversation_messages.domain` (written for every turn) and
+`ncb_conversation_sessions.ended_at` (written when a session closes).
 
 **Environment variables** (all optional, defaults in brackets):
 
@@ -348,8 +349,8 @@ diagnostics are at `DEBUG`.
   may have been committed. This new project's `.gitignore` is a normal one.
 - The original shopping bot had its own cart sidebar and `/api/cart/*`,
   `/api/order/place` endpoints. They are gone: see "Host website cart".
-  The `cart_items`, `orders` and `order_items` tables are no longer written
-  (`cart_sessions` is still used - it holds per-chat state).
+  The `ncb_cart_items`, `ncb_orders` and `ncb_order_items` tables are no
+  longer written (`ncb_bot_sessions` is still used - it holds per-chat state).
 
 ## Host website cart
 

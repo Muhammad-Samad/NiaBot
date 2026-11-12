@@ -6,6 +6,9 @@ from database.connection import DatabaseManager
 logger = logging.getLogger(__name__)
 
 class ConversationRepository:
+    """Operations/policy turn log: ncb_conversation_sessions (one row per sid)
+    and ncb_intent_logs (intent, flow, confidence and metadata per turn)."""
+
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieves the most recent session for a given session_id.
@@ -14,7 +17,7 @@ class ConversationRepository:
             with DatabaseManager() as conn:
                 cursor = conn.cursor(dictionary=True)
                 cursor.execute(
-                    "SELECT * FROM conversation_sessions WHERE session_id = %s ORDER BY id DESC LIMIT 1", 
+                    "SELECT * FROM ncb_conversation_sessions WHERE session_id = %s ORDER BY id DESC LIMIT 1",
                     (session_id,)
                 )
                 result = cursor.fetchone()
@@ -30,18 +33,18 @@ class ConversationRepository:
         """
         try:
             insert_query = """
-            INSERT IGNORE INTO conversation_sessions (session_id, customer_identifier)
+            INSERT IGNORE INTO ncb_conversation_sessions (session_id, customer_identifier)
             VALUES (%s, %s)
             """
             with DatabaseManager() as conn:
                 cursor = conn.cursor()
                 cursor.execute(insert_query, (session_id, customer_identifier))
                 conn.commit()
-                
-                cursor.execute("SELECT id FROM conversation_sessions WHERE session_id = %s LIMIT 1", (session_id,))
+
+                cursor.execute("SELECT id FROM ncb_conversation_sessions WHERE session_id = %s LIMIT 1", (session_id,))
                 result = cursor.fetchone()
                 internal_id = result[0] if result else None
-                
+
                 cursor.close()
                 return internal_id
         except Exception as e:
@@ -54,7 +57,7 @@ class ConversationRepository:
         """
         try:
             query = """
-            UPDATE conversation_sessions 
+            UPDATE ncb_conversation_sessions
             SET status = 'closed', last_activity = CURRENT_TIMESTAMP, ended_at = CURRENT_TIMESTAMP
             WHERE session_id = %s AND (status != 'closed' OR status IS NULL)
             """
@@ -75,8 +78,8 @@ class ConversationRepository:
                 # but let's explicitly update it just in case, or just do a dummy update.
                 # Usually setting it to CURRENT_TIMESTAMP works.
                 cursor.execute("""
-                UPDATE conversation_sessions 
-                SET last_activity = CURRENT_TIMESTAMP 
+                UPDATE ncb_conversation_sessions
+                SET last_activity = CURRENT_TIMESTAMP
                 WHERE session_id = %s
                 """, (session_id,))
                 conn.commit()
@@ -84,28 +87,31 @@ class ConversationRepository:
         except Exception as e:
             logger.error(f"[ConversationRepository] Failed to update last activity for session {session_id}: {e}")
 
-    def save_message(self, conversation_id: int, sender: str, message: str, 
-                     message_type: Optional[str] = None, 
-                     intent: Optional[str] = None, 
-                     flow_name: Optional[str] = None, 
-                     confidence: Optional[float] = None, 
+    def save_message(self, conversation_id: int, session_id: str, sender: str, message: str,
+                     message_type: Optional[str] = None,
+                     intent: Optional[str] = None,
+                     flow_name: Optional[str] = None,
+                     confidence: Optional[float] = None,
                      metadata: Optional[dict] = None):
         """
-        Saves a message to the conversation_messages table.
+        Saves one turn to the ncb_intent_logs table. `conversation_id` is
+        ncb_conversation_sessions.id; customer_id is copied from the
+        ncb_bot_sessions row of this sid (NULL when no verified customer).
         Logs and swallows exceptions.
         """
         try:
             metadata_json = json.dumps(metadata) if metadata else None
-            
+
             insert_query = """
-            INSERT INTO chatbot_messages 
-            (conversation_id, sender, message, message_type, intent, flow_name, confidence, metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO ncb_intent_logs
+            (conversation_id, customer_id, sender, message, message_type, intent, flow_name, confidence, metadata)
+            VALUES (%s, (SELECT bs.customer_id FROM ncb_bot_sessions bs WHERE bs.session_id = %s),
+                    %s, %s, %s, %s, %s, %s, %s)
             """
             with DatabaseManager() as conn:
                 cursor = conn.cursor()
                 cursor.execute(insert_query, (
-                    conversation_id, sender, message, message_type, 
+                    conversation_id, session_id, sender, message, message_type,
                     intent, flow_name, confidence, metadata_json
                 ))
                 conn.commit()
@@ -116,9 +122,9 @@ class ConversationRepository:
     def get_messages(self, session_id: str) -> List[Dict[str, Any]]:
         try:
             query = """
-            SELECT m.* 
-            FROM chatbot_messages m
-            JOIN conversation_sessions s ON m.conversation_id = s.id
+            SELECT m.*
+            FROM ncb_intent_logs m
+            JOIN ncb_conversation_sessions s ON m.conversation_id = s.id
             WHERE s.session_id = %s
             ORDER BY m.timestamp ASC
             """
@@ -127,7 +133,7 @@ class ConversationRepository:
                 cursor.execute(query, (session_id,))
                 results = cursor.fetchall()
                 cursor.close()
-                
+
                 # Parse metadata JSON
                 for row in results:
                     if row.get('metadata'):
@@ -135,7 +141,7 @@ class ConversationRepository:
                             row['metadata'] = json.loads(row['metadata'])
                         except:
                             pass
-                
+
                 return results
         except Exception as e:
             logger.error(f"[ConversationRepository] Failed to get messages for session {session_id}: {e}")

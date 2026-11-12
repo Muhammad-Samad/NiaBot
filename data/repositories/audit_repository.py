@@ -16,7 +16,7 @@ class AuditRepository:
         Inserts an audit log into the database independently of any active transaction.
         """
         query = """
-        INSERT INTO audit_logs (
+        INSERT INTO ncb_audit_logs (
             request_id, session_id, conversation_id, source, actor, actor_id,
             event_type, category, outcome, duration_ms, error_code,
             order_id, complaint_id, metadata
