@@ -329,7 +329,7 @@ def _transcript(sid: str) -> str:
         cur = conn.cursor(dictionary=True)
         cur.execute(
             """SELECT role, message, products_json FROM ncb_conversation_messages
-               WHERE session_id=%s ORDER BY id DESC LIMIT %s""",
+               WHERE session_id=%s AND role <> 'system' ORDER BY id DESC LIMIT %s""",
             (sid, _SUMMARY_MAX_MESSAGES),
         )
         messages = list(reversed(cur.fetchall()))
@@ -348,7 +348,8 @@ def _transcript(sid: str) -> str:
     lines = []
     for m in messages:
         text = " ".join(str(m["message"]).split())[:400]
-        line = f"{'customer' if m['role'] == 'user' else 'assistant'}: {text}"
+        speaker = {"user": "customer", "agent": "support agent"}.get(m["role"], "assistant")
+        line = f"{speaker}: {text}"
         try:
             products = json.loads(m["products_json"]) if m["products_json"] else []
             names = [

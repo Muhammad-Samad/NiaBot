@@ -98,7 +98,7 @@ def _vector_query_clause(vector: list[float], k: int) -> str:
     vector-distance-based (matching the old query_by=embedding pure-semantic
     behaviour), since query_by below has to reference a real text field."""
     values = ",".join(f"{v:.8f}" for v in vector)
-    return f"embedding:([{values}], k:{k}, alpha:1)"
+    return f"embeddingopenai:([{values}], k:{k}, alpha:1)"
 
 
 def price_filter_to_filter_by(price_filter: dict | None) -> str | None:
@@ -201,7 +201,7 @@ def _product_search(vector: list[float], k: int, filter_by: str | None) -> dict:
         "q": "*",
         "query_by": EMBEDDING_FIELDS,
         "vector_query": _vector_query_clause(vector, k),
-        "exclude_fields": "embedding",
+        "exclude_fields": "embeddingopenai",
         "per_page": k,
         "prefix": "false",
     }
@@ -219,23 +219,34 @@ def _relevant(hits: list) -> list:
     return [h for h in hits if h.get("vector_distance", 0) <= VECTOR_DISTANCE_THRESHOLD]
 
 
-def _search_items(vectors: list, k: int, price_filter_by: str | None, facet_chain: list[dict]):
+def _search_items(
+    vectors: list, k: int, price_filter_by: str | None, facet_chain: list[dict]
+):
     """One multi_search for all items. facet_chain lists facet filters from
     most to least specific (see facets.filter_chain); every item is searched
     with each of them and without any, and keeps the first that returns a
     relevant hit. Returns (per-item hits, per-item facet fields applied)."""
     levels = [*facet_chain, {}]
     searches = [
-        _product_search(v, k, _join_filters(price_filter_by, facets.to_filter_by(level)))
+        _product_search(
+            v, k, _join_filters(price_filter_by, facets.to_filter_by(level))
+        )
         for v in vectors
         for level in levels
     ]
-    results = _typesense_multi_search({"searches": searches}, {}, None).get("results", [])
+    results = _typesense_multi_search({"searches": searches}, {}, None).get(
+        "results", []
+    )
 
     per_item, applied = [], []
     for i in range(len(vectors)):
-        item_results = [r.get("hits", []) for r in results[i * len(levels) : (i + 1) * len(levels)]]
-        pick = next((j for j, h in enumerate(item_results[:-1]) if _relevant(h)), len(levels) - 1)
+        item_results = [
+            r.get("hits", []) for r in results[i * len(levels) : (i + 1) * len(levels)]
+        ]
+        pick = next(
+            (j for j, h in enumerate(item_results[:-1]) if _relevant(h)),
+            len(levels) - 1,
+        )
         per_item.append(item_results[pick])
         applied.append(sorted(levels[pick]))
     return per_item, applied
@@ -292,7 +303,10 @@ def typesense_search_products(
         print("-----price filter_by: ", filter_by)
     facet_chain = facets.filter_chain(facet_filter or {})
     if facet_chain:
-        print("-----facet filters (most specific first): ", [facets.to_filter_by(f) for f in facet_chain])
+        print(
+            "-----facet filters (most specific first): ",
+            [facets.to_filter_by(f) for f in facet_chain],
+        )
 
     items = [i.strip() for i in expanded_query.split(",") if i.strip()]
     is_multi_item = len(items) >= MULTI_ITEM_THRESHOLD

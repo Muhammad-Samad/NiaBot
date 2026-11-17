@@ -418,7 +418,7 @@ def _format_history(history: list[dict]) -> str:
         if prev_age is not None and age is not None and prev_age - age >= _GAP_MARK_MINUTES:
             lines.append(f"(… {_fmt_gap(prev_age - age)} …)")
         prev_age = age
-        speaker = "customer" if m["role"] == "user" else "you"
+        speaker = {"user": "customer", "agent": "human support agent"}.get(m["role"], "you")
         text = " ".join(str(m["message"]).split())
         # Your own replies are kept longer: a descriptive list reply ends
         # with the extra items it offered, which a following "yes" accepts.

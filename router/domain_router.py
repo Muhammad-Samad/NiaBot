@@ -169,7 +169,8 @@ def _operations_result(
     )
     # Operations hands a `general_policy` intent to the policy domain via its
     # policy_rag tool - record that turn as a policy one.
-    handed_to_policy = (result.get("debug") or {}).get("tool_request") == "policy_rag"
+    debug = result.get("debug") or {}
+    handed_to_policy = debug.get("tool_request") == "policy_rag"
     return {
         "answer": result["answer"],
         "products": [],
@@ -178,6 +179,16 @@ def _operations_result(
         # operations turn — pass it straight through.
         "conversation_id": conversation_id,
         "domain": "policy" if handed_to_policy else "operations",
+        # Read by the human-handoff detector (domains/handoff/detector.py).
+        "handoff_signals": {
+            "source": "operations",
+            "intent": debug.get("intent"),
+            "tool_request": debug.get("tool_request"),
+            "flow_status": debug.get("flow_status"),
+            "raw_response": debug.get("raw_response"),
+            "escalation_offered": bool(debug.get("escalation_offered")),
+            "policy_error": bool((debug.get("policy_metadata") or {}).get("error")),
+        },
     }
 
 

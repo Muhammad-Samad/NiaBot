@@ -136,4 +136,11 @@ def handle_message(sid: str, message: str, conversation_id: str | None = None,
         # pass it straight through so shopping follow-ups keep working.
         "conversation_id": conversation_id,
         "domain": "policy",
+        # Read by the human-handoff detector (domains/handoff/detector.py).
+        "handoff_signals": {
+            "source": "policy",
+            "policy_error": bool(result["metadata"].get("error")),
+            "grounded": result["metadata"].get("grounded"),
+            "raw_response": result["answer"],
+        },
     }

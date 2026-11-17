@@ -258,6 +258,37 @@
   .bubble a { color: inherit; text-decoration: underline; word-break: break-all; }
   .bubble.bot a { color: var(--brand-red); }
 
+  /* Human support (domains/handoff): agent replies, status notes, queue banner */
+  .avatar.agent { background: var(--accent-green); color: #fff; font-size: 15px; }
+  .bubble.agent {
+    background: var(--accent-green-lt);
+    border: 1px solid #BFE3CF;
+    border-bottom-left-radius: 4px;
+    color: var(--text-primary);
+  }
+  .bubble.agent .agent-name {
+    display: block; font-size: 11px; font-weight: 700;
+    color: var(--accent-green); margin-bottom: 2px;
+  }
+  .msg-row.system { justify-content: center; }
+  .system-note {
+    max-width: 85%; padding: 5px 12px;
+    font-size: 12px; color: var(--text-secondary); text-align: center;
+    background: var(--neutral-bg); border: 1px dashed var(--neutral-border); border-radius: 999px;
+  }
+  .handoff-banner {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px; font-size: 12.5px;
+    background: var(--accent-green-lt); color: var(--accent-green);
+    border-top: 1px solid #BFE3CF;
+  }
+  .handoff-banner[hidden] { display: none; }
+  .handoff-banner .dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    background: var(--accent-green); animation: handoffPulse 1.4s ease-in-out infinite;
+  }
+  @keyframes handoffPulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+
   /* Clickable numbered options inside a bot bubble (same look as the
      welcome menu). Once the user answers, the list is locked and the
      chosen option stays highlighted. */
@@ -618,6 +649,11 @@
       </div>
     </div>
 
+    <!-- Shown while the chat is with Naheed Customer Support (queue / agent) -->
+    <div class="handoff-banner" id="handoff-banner" role="status" hidden>
+      <span class="dot"></span><span id="handoff-banner-text"></span>
+    </div>
+
     <div class="input-bar">
       <div class="input-wrap">
         <textarea id="user-input" rows="1"
@@ -916,18 +952,106 @@
     return bubble;
   }
 
+  // ─── Human support (domains/handoff) ──────────────────────────────────────
+  // When NiaBot hands the chat to Naheed Customer Support, /api/chat answers
+  // with mode "human": the AI is paused, the customer's messages go to the
+  // agent, and agent replies / status notes are polled from
+  // /api/handoff/updates until the agent closes the conversation.
+  const DEFAULT_PLACEHOLDER = document.getElementById('user-input').placeholder;
+  const shownSupportIds = new Set();
+  let handoff = null;        // {id, status, queue_position, agent_name, poll_ms} while active
+  let lastSupportId = 0;
+  let handoffTimer = null;
+
+  function appendSupportMessage(role, text, agentName) {
+    const welcome = document.getElementById('welcome');
+    if (welcome) welcome.remove();
+    settleOptions(null);
+
+    const msgs = document.getElementById('messages');
+    const row = document.createElement('div');
+    if (role === 'system') {
+      row.className = 'msg-row system';
+      row.innerHTML = `<div class="system-note" dir="auto">${escapeHtml(text)}</div>`;
+    } else {
+      row.className = 'msg-row bot';
+      row.innerHTML = `<div class="avatar agent" title="Naheed Customer Support">🎧</div>`
+        + `<div class="bubble agent" dir="auto"><span class="agent-name">${escapeHtml(agentName || 'Customer Support')}</span>${renderText(text)}</div>`;
+    }
+    msgs.appendChild(row);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  function addSupportMessage(m) {
+    if (!m || shownSupportIds.has(m.id)) return;
+    shownSupportIds.add(m.id);
+    lastSupportId = Math.max(lastSupportId, m.id || 0);
+    appendSupportMessage(m.role, m.message, m.agent_name);
+  }
+
+  function renderHandoffBanner() {
+    const banner = document.getElementById('handoff-banner');
+    if (!handoff) { banner.hidden = true; return; }
+    let text;
+    if (handoff.status === 'open') {
+      text = `You're chatting with ${handoff.agent_name || 'our support team'} from Naheed Customer Support`;
+    } else if (handoff.queue_position) {
+      text = `Waiting for a support agent - you are #${handoff.queue_position} in the queue`;
+    } else {
+      text = 'Connecting you to a support agent…';
+    }
+    document.getElementById('handoff-banner-text').textContent = text;
+    banner.hidden = false;
+  }
+
+  function setHandoff(h) {
+    handoff = h && (h.status === 'waiting' || h.status === 'open') ? h : null;
+    renderHandoffBanner();
+    document.getElementById('user-input').placeholder = handoff
+      ? 'Type your message to Naheed Customer Support…' : DEFAULT_PLACEHOLDER;
+    clearTimeout(handoffTimer);
+    if (handoff) handoffTimer = setTimeout(pollHandoff, handoff.poll_ms || 3000);
+  }
+
+  async function pollHandoff() {
+    const trackedId = handoff ? handoff.id : null;
+    try {
+      const params = new URLSearchParams({ sid: sessionId, device_id: deviceId, after_id: String(lastSupportId) });
+      if (customerToken) params.set('ct', customerToken);
+      if (trackedId) params.set('handoff_id', String(trackedId));
+      const res = await fetch('/api/handoff/updates?' + params);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      (data.messages || []).forEach(addSupportMessage);
+      if (data.active && data.handoff) {
+        setHandoff(data.handoff);
+      } else if (trackedId) {
+        setHandoff(null);   // closed by the agent: NiaBot answers again
+      }
+    } catch (e) {
+      // Keep trying while the chat is with support; a blip must not drop it.
+      if (handoff) {
+        clearTimeout(handoffTimer);
+        handoffTimer = setTimeout(pollHandoff, (handoff.poll_ms || 3000) * 2);
+      }
+    }
+  }
+
   // ─── Send a chat message (shared by typed messages and image uploads) ─────
   async function postChatMessage(rawText, displayText) {
     appendMessage('user', displayText);
 
     const msgs = document.getElementById('messages');
-    const typingRow = document.createElement('div');
-    typingRow.className = 'msg-row bot';
-    typingRow.id = 'typing';
-    typingRow.innerHTML = `
-      <div class="avatar bot">N</div>
-      <div class="bubble bot typing">NiaBot is typing…</div>`;
-    msgs.appendChild(typingRow);
+    // With a human agent there is no instant reply - no "NiaBot is typing".
+    if (!handoff) {
+      const typingRow = document.createElement('div');
+      typingRow.className = 'msg-row bot';
+      typingRow.id = 'typing';
+      typingRow.innerHTML = `
+        <div class="avatar bot">N</div>
+        <div class="bubble bot typing">NiaBot is typing…</div>`;
+      msgs.appendChild(typingRow);
+    }
     msgs.scrollTop = msgs.scrollHeight;
 
     const sendBtn = document.getElementById('send-btn');
@@ -955,7 +1079,16 @@
         localStorage.setItem('npk_conversation_id', conversationId);
         localStorage.removeItem('npk_new_chat');
 
-        appendMessage('bot', data.answer, data.products);
+        if (data.mode === 'human') {
+          // Transferred to / already with customer support.
+          if (data.answer) appendMessage('bot', data.answer);
+          const wasActive = !!handoff;
+          setHandoff(data.handoff);
+          if (!wasActive) pollHandoff();   // pick up "agent joined" at once
+        } else {
+          if (handoff) setHandoff(null);
+          appendMessage('bot', data.answer, data.products);
+        }
       }
     } catch (err) {
       document.getElementById('typing')?.remove();
@@ -1384,6 +1517,7 @@
       }
       if (!data.messages || data.messages.length === 0) {
         loadWelcomeBack();
+        pollHandoff();   // still with customer support from another chat?
         return;
       }
 
@@ -1399,12 +1533,20 @@
 
       // Render each message with full product cards
       data.messages.forEach(m => {
+        // Human-support turns: agent replies and status notes.
+        if (m.role === 'agent' || m.role === 'system') {
+          addSupportMessage(m);
+          return;
+        }
         const role = m.role === 'assistant' ? 'bot' : 'user';
         // A stored bare-number reply to an option list is shown as its label.
         const text = role === 'user' ? (activeOptionLabel(m.message) || m.message) : m.message;
         // user messages never have products; assistant messages may carry products
         appendMessage(role, text, m.products || []);
       });
+
+      // Resume human-support mode if the chat is still queued / with an agent.
+      pollHandoff();
     } catch (e) {
       console.warn('Could not load history:', e);
     }

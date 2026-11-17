@@ -429,6 +429,10 @@ class ConversationManager:
         if reassurance and isinstance(reassurance, str):
             response_text = f"{reassurance}{response_text}"
 
+        # The reply before the LLM rewrite - the human-handoff detector
+        # (domains/handoff/detector.py) matches support-escalation wording on it.
+        raw_response_text = response_text
+
         # 4. Say it like a human agent, in the customer's language. Policy
         # answers are already written that way by the policy domain.
         if flow_response.tool_request != "policy_rag":
@@ -471,6 +475,10 @@ class ConversationManager:
             "flow_status": flow_response.status,
             "tool_request": flow_response.tool_request,
             "tool_args": flow_response.tool_args,
+            # Signals for the human-handoff detector (domains/handoff/detector.py).
+            "raw_response": raw_response_text,
+            "escalation_offered": should_offer_escalation,
+            "policy_metadata": bot_metadata,
             "raw_json": raw_json
         }
         

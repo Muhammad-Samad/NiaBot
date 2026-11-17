@@ -104,6 +104,11 @@ CREATE TABLE IF NOT EXISTS ncb_conversation_messages (
     INDEX idx_domain (domain)
 ) ENGINE = InnoDB;
 
+-- Human-agent handoff (domains/handoff): naheedopsv2's Laravel migrations
+-- extend this table (role ENUM adds 'agent' and 'system'; new columns
+-- handoff_id, agent_id) and create ncb_handoff_conversations and
+-- ncb_csr_additional. Run them from naheedopsv2 (php artisan migrate).
+
 -- If upgrading an existing install, run migrations/add_policy_domain_columns.sql
 -- (adds ncb_conversation_messages.domain and ncb_conversation_sessions.ended_at)
 -- and migrations/add_ts_conversation_id_and_customer_id.sql.

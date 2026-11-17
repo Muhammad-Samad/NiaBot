@@ -55,29 +55,36 @@ def ensure_bot_session(sid, ts_conversation_id=None):
 
 
 def save_conversation_message(sid, ts_conversation_id, role, message, products=None, cart_action=None,
-                              domain=None, customer_id=None):
+                              domain=None, customer_id=None, handoff_id=None):
     """Persist one chat turn (user or assistant), from ANY domain, so
     /api/history can restore the full unified chat UI on page reload.
     `domain` is the domain that handled the turn (shopping / operations /
-    policy / menu); `customer_id` the verified numeric customer id or None."""
+    policy / menu / handoff); `customer_id` the verified numeric customer id
+    or None; `handoff_id` links the turn to a human-support handoff
+    (domains/handoff) - the column only exists once naheedopsv2's migrations
+    ran, so it is only written when set."""
+    columns = ["session_id", "ts_conversation_id", "customer_id", "role", "message",
+               "products_json", "cart_action_json", "domain"]
+    values = [
+        sid,
+        ts_conversation_id,
+        customer_id,
+        role,
+        message,
+        json.dumps(products) if products else None,
+        json.dumps(cart_action) if cart_action else None,
+        domain,
+    ]
+    if handoff_id:
+        columns.append("handoff_id")
+        values.append(handoff_id)
     try:
         with DatabaseManager() as conn:
             cur = conn.cursor()
             cur.execute(
-                """INSERT INTO ncb_conversation_messages
-                       (session_id, ts_conversation_id, customer_id, role, message,
-                        products_json, cart_action_json, domain)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                (
-                    sid,
-                    ts_conversation_id,
-                    customer_id,
-                    role,
-                    message,
-                    json.dumps(products) if products else None,
-                    json.dumps(cart_action) if cart_action else None,
-                    domain,
-                ),
+                f"""INSERT INTO ncb_conversation_messages ({", ".join(columns)})
+                    VALUES ({", ".join(["%s"] * len(columns))})""",
+                tuple(values),
             )
             conn.commit()
             cur.close()
@@ -126,8 +133,10 @@ def get_history(sid):
         row = cur.fetchone()
         conversation_id = row["ts_conversation_id"] if row else None
 
+        # SELECT *: handoff_id / agent_id only exist once naheedopsv2's
+        # migrations ran (human-agent handoff).
         cur.execute(
-            """SELECT role, message, products_json, cart_action_json
+            """SELECT *
                FROM ncb_conversation_messages
                WHERE session_id=%s
                ORDER BY id ASC""",
@@ -135,6 +144,15 @@ def get_history(sid):
         )
         rows = cur.fetchall()
         cur.close()
+
+    agent_ids = {r.get("agent_id") for r in rows if r["role"] == "agent" and r.get("agent_id")}
+    agent_names = {}
+    if agent_ids:
+        from domains.handoff import repository as handoff_repository
+        try:
+            agent_names = handoff_repository.agent_names(agent_ids)
+        except Exception as e:
+            logger.warning(f"Could not load agent names for history (sid={sid}): {e}")
 
     messages = []
     for r in rows:
@@ -148,10 +166,13 @@ def get_history(sid):
             cart_action = None
 
         messages.append({
+            "id":          r["id"],
             "role":        r["role"],
             "message":     r["message"],
             "products":    products,
             "cart_action": cart_action,
+            "handoff_id":  r.get("handoff_id"),
+            "agent_name":  agent_names.get(r.get("agent_id")) if r["role"] == "agent" else None,
         })
 
     return conversation_id, messages
@@ -241,7 +262,7 @@ def get_recent_messages(sid, limit: int):
             """SELECT id, role, message, products_json, domain, created_at,
                       TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age_minutes
                FROM ncb_conversation_messages
-               WHERE session_id=%s
+               WHERE session_id=%s AND role <> 'system'
                ORDER BY id DESC LIMIT %s""",
             (sid, limit),
         )

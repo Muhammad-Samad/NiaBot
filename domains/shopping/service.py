@@ -24,6 +24,9 @@ from config.memory import HISTORY_MESSAGES
 from config.shopping import VECTOR_DISTANCE_THRESHOLD
 from domains.shopping import conversation, facets, query_engine, reply, repository, search
 from services import memory_service
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 NO_MATCH_REPLY = (
     "I couldn't find any products matching your request at Naheed.pk. "
@@ -49,6 +52,17 @@ def _result(answer, products, cart_action, conversation_id):
         "cart_action": cart_action,
         "conversation_id": conversation_id,
     }
+
+
+def _search_failed(conversation_id):
+    result = _result(
+        "Sorry, I couldn't search our products right now.",
+        [],
+        None,
+        conversation_id,
+    )
+    result["handoff_signals"] = {"source": "shopping", "technical_failure": True}
+    return result
 
 
 def handle_message(
@@ -188,12 +202,10 @@ def _search_turn(sid, user_msg, turn, state, history, tracking_conv_id) -> dict:
             facet_filter=_facet_filter(need, turn.kind),
         )
     except Exception as e:
-        return _result(
-            f"Sorry, something went wrong while searching: {e}",
-            [],
-            None,
-            tracking_conv_id,
-        )
+        # Never show the raw exception to the customer; the human-handoff
+        # detector sees `handoff_signals` and transfers to support.
+        logger.exception(f"Product search failed: {e}")
+        return _search_failed(tracking_conv_id)
 
     new_conv_id = (conversation_result or {}).get("conversation_id") or tracking_conv_id
     if new_conv_id != tracking_conv_id:
@@ -384,12 +396,10 @@ def _handle_single_message(sid, user_msg, client_conv_id, tracking_conv_id) -> d
             price_filter=price_filter,
         )
     except Exception as e:
-        return _result(
-            f"Sorry, something went wrong while searching: {e}",
-            [],
-            None,
-            tracking_conv_id,
-        )
+        # Never show the raw exception to the customer; the human-handoff
+        # detector sees `handoff_signals` and transfers to support.
+        logger.exception(f"Product search failed: {e}")
+        return _search_failed(tracking_conv_id)
 
     new_conv_id = (conversation_result or {}).get("conversation_id") or tracking_conv_id
     if new_conv_id != tracking_conv_id:
