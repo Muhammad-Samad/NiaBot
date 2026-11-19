@@ -5,7 +5,8 @@
   find_active()      - the customer's waiting/open handoff, if any
   customer_message() - while a handoff is active the AI is paused: the
                        message is stored for the agent, no AI reply
-  updates()          - agent replies / status for the widget's polling
+  updates()          - agent replies / status for the widget (fetched when a
+                       Reverb event arrives, or by fallback polling)
 
 All handoff messages go into ncb_conversation_messages (with handoff_id), so
 /api/history shows one continuous chat: NiaBot, the agent, then NiaBot again
@@ -14,6 +15,7 @@ once the agent closes the conversation in naheedopsv2.
 
 import hashlib
 import hmac
+import threading
 import time
 
 import requests
@@ -25,7 +27,7 @@ from config.handoff import (
     OPS_REQUEST_TIMEOUT,
     POLL_INTERVAL_MS,
 )
-from domains.handoff import detector, repository
+from domains.handoff import detector, realtime, repository
 from domains.shopping import repository as chat_repository
 from utils.logger import get_logger
 
@@ -109,6 +111,17 @@ def customer_message(handoff: dict, sid: str, conversation_id: str, user_msg: st
         sid, conversation_id, "user", user_msg, domain=DOMAIN, customer_id=customer_id, handoff_id=handoff["id"],
     )
     repository.touch_customer_message(handoff["id"])
+    if handoff.get("agent_id"):
+        # Tell the assigned agent's screen right away (Reverb). Off the
+        # request thread: the customer's reply must not wait on it.
+        threading.Thread(
+            target=realtime.publish,
+            args=(
+                [realtime.agent_channel(handoff["agent_id"])],
+                {"handoff_id": handoff["id"], "type": "message", "status": handoff.get("status")},
+            ),
+            daemon=True,
+        ).start()
     return _response("", sid, conversation_id, handoff["id"], _state_of(handoff))
 
 
@@ -130,7 +143,14 @@ def updates(sid: str, customer_id: int | None, handoff_id: int | None, after_id:
         "active": state["status"] in ("waiting", "open"),
         "handoff": {"id": handoff["id"], **state, "poll_ms": POLL_INTERVAL_MS},
         "messages": repository.support_messages_after(handoff["id"], max(0, int(after_id or 0))),
+        "realtime": realtime.client_config(),
     }
+
+
+def can_access(handoff_id: int, sid: str, customer_id: int | None) -> bool:
+    """Whether this customer/session may follow the handoff (realtime auth)."""
+    handoff = repository.get_by_id(handoff_id)
+    return bool(handoff) and _owned_by(handoff, sid, customer_id)
 
 
 def _owned_by(handoff: dict, sid: str, customer_id: int | None) -> bool:
@@ -157,6 +177,8 @@ def _response(answer: str, sid: str, conversation_id: str, handoff_id: int, stat
         "cart_action": None,
         "mode": "human",
         "handoff": {"id": handoff_id, **state, "poll_ms": POLL_INTERVAL_MS},
+        # Socket settings for instant agent replies (None = poll only).
+        "realtime": realtime.client_config(),
     }
 
 

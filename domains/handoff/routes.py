@@ -5,13 +5,17 @@ GET /api/handoff/updates?sid=&ct=&device_id=&handoff_id=&after_id=
     (and once on page load). Returns the handoff status (queue position /
     agent name) and agent/system messages newer than after_id.
 
+POST /api/handoff/ws-auth   (form: socket_id, channel_name, sid, ct, device_id)
+    Reverb private-channel authorization for the widget's socket: the
+    customer may only listen on private-handoff.{id} of their own handoff.
+
 Same identity rules as /api/chat and /api/history: the signed customer
 token (ct) identifies a logged-in customer, otherwise the sid itself.
 """
 
 from flask import Blueprint, jsonify, request
 
-from domains.handoff import service
+from domains.handoff import realtime, service
 from services import memory_service
 from utils.logger import get_logger
 
@@ -42,3 +46,30 @@ def updates():
     except Exception as e:
         logger.error(f"Handoff updates failed (sid={sid}): {e}")
         return jsonify({"active": False, "handoff": None, "messages": [], "error": "unavailable"}), 503
+
+
+@handoff_bp.route("/ws-auth", methods=["POST"])
+def ws_auth():
+    """Signs the widget's subscription to private-handoff.{id} (pusher-js
+    channelAuthorization) after checking the customer owns that handoff."""
+    form = request.form
+    sid = (form.get("sid") or "").strip()
+    channel_name = form.get("channel_name") or ""
+    handoff_id = realtime.handoff_id_from_channel(channel_name)
+    if not sid or not handoff_id or not realtime.enabled():
+        return jsonify({"error": "Forbidden"}), 403
+
+    customer_key = memory_service.resolve_customer_key(form.get("device_id"), form.get("ct"))
+    customer_id = memory_service.customer_id_from_key(customer_key)
+    try:
+        allowed = service.can_access(handoff_id, sid, customer_id)
+    except Exception as e:
+        logger.error(f"Realtime auth lookup failed (sid={sid}): {e}")
+        return jsonify({"error": "unavailable"}), 503
+    if not allowed:
+        return jsonify({"error": "Forbidden"}), 403
+
+    auth = realtime.authorize(form.get("socket_id") or "", channel_name)
+    if not auth:
+        return jsonify({"error": "Forbidden"}), 403
+    return jsonify(auth)

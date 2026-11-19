@@ -954,14 +954,20 @@
 
   // ─── Human support (domains/handoff) ──────────────────────────────────────
   // When NiaBot hands the chat to Naheed Customer Support, /api/chat answers
-  // with mode "human": the AI is paused, the customer's messages go to the
-  // agent, and agent replies / status notes are polled from
-  // /api/handoff/updates until the agent closes the conversation.
+  // with mode "human": the AI is paused and the customer's messages go to the
+  // agent. Agent replies / status notes are fetched from /api/handoff/updates:
+  //   - instantly, when a Reverb event arrives on private-handoff.{id}
+  //     (socket authorized by /api/handoff/ws-auth);
+  //   - by polling ONLY while that socket is not connected (Reverb off/down,
+  //     network drop), plus one catch-up fetch on every (re)connect.
   const DEFAULT_PLACEHOLDER = document.getElementById('user-input').placeholder;
+  const PUSHER_JS_URL = 'https://cdn.jsdelivr.net/npm/pusher-js@8.4.0/dist/web/pusher.min.js';
   const shownSupportIds = new Set();
   let handoff = null;        // {id, status, queue_position, agent_name, poll_ms} while active
   let lastSupportId = 0;
   let handoffTimer = null;
+  let realtimeConfig = null; // {key, host, port, scheme} from the server, null = poll only
+  let rt = { pusher: null, channel: null, handoffId: null, connected: false };
 
   function appendSupportMessage(role, text, agentName) {
     const welcome = document.getElementById('welcome');
@@ -1009,8 +1015,21 @@
     renderHandoffBanner();
     document.getElementById('user-input').placeholder = handoff
       ? 'Type your message to Naheed Customer Support…' : DEFAULT_PLACEHOLDER;
+    if (handoff) {
+      connectRealtime(handoff.id);
+      scheduleFallbackPoll();
+    } else {
+      clearTimeout(handoffTimer);
+      disconnectRealtime();
+    }
+  }
+
+  // Polls only while the socket is down; a no-op while it is connected.
+  function scheduleFallbackPoll(delay) {
     clearTimeout(handoffTimer);
-    if (handoff) handoffTimer = setTimeout(pollHandoff, handoff.poll_ms || 3000);
+    if (handoff && !rt.connected) {
+      handoffTimer = setTimeout(pollHandoff, delay || handoff.poll_ms || 3000);
+    }
   }
 
   async function pollHandoff() {
@@ -1022,6 +1041,7 @@
       const res = await fetch('/api/handoff/updates?' + params);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
+      if (data.realtime !== undefined) realtimeConfig = data.realtime;
       (data.messages || []).forEach(addSupportMessage);
       if (data.active && data.handoff) {
         setHandoff(data.handoff);
@@ -1030,10 +1050,73 @@
       }
     } catch (e) {
       // Keep trying while the chat is with support; a blip must not drop it.
-      if (handoff) {
-        clearTimeout(handoffTimer);
-        handoffTimer = setTimeout(pollHandoff, (handoff.poll_ms || 3000) * 2);
-      }
+      if (handoff) scheduleFallbackPoll((handoff.poll_ms || 3000) * 2);
+    }
+  }
+
+  // ─── Realtime socket (Laravel Reverb in naheedopsv2, Pusher protocol) ─────
+  function loadPusherJs() {
+    if (window.Pusher) return Promise.resolve();
+    if (!loadPusherJs.promise) {
+      loadPusherJs.promise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = PUSHER_JS_URL;
+        script.onload = resolve;
+        script.onerror = () => { loadPusherJs.promise = null; reject(new Error('pusher-js failed to load')); };
+        document.head.appendChild(script);
+      });
+    }
+    return loadPusherJs.promise;
+  }
+
+  async function connectRealtime(handoffId) {
+    if (!realtimeConfig || rt.handoffId === handoffId) return;
+    disconnectRealtime();
+    rt.handoffId = handoffId;
+    try { await loadPusherJs(); } catch (e) { return; }   // stays on polling
+    if (rt.handoffId !== handoffId) return;              // handoff ended meanwhile
+
+    const cfg = realtimeConfig;
+    const authParams = { sid: sessionId, device_id: deviceId };
+    if (customerToken) authParams.ct = customerToken;
+
+    const pusher = new Pusher(cfg.key, {
+      cluster: 'mt1',   // required by pusher-js, unused with wsHost
+      wsHost: cfg.host,
+      wsPort: cfg.port,
+      wssPort: cfg.port,
+      forceTLS: cfg.scheme === 'https',
+      enabledTransports: ['ws', 'wss'],
+      disableStats: true,
+      channelAuthorization: { endpoint: '/api/handoff/ws-auth', transport: 'ajax', params: authParams },
+    });
+    const channel = pusher.subscribe('private-handoff.' + handoffId);
+    channel.bind('pusher:subscription_succeeded', () => setRealtimeConnected(pusher.connection.state === 'connected'));
+    channel.bind('pusher:subscription_error', () => setRealtimeConnected(false));
+    channel.bind('handoff.updated', () => pollHandoff());   // signal -> fetch the change
+    pusher.connection.bind('state_change', states => {
+      if (states.current !== 'connected') setRealtimeConnected(false);
+      else if (channel.subscribed) setRealtimeConnected(true);
+    });
+    rt.pusher = pusher;
+    rt.channel = channel;
+  }
+
+  function disconnectRealtime() {
+    if (rt.pusher) {
+      try { rt.pusher.disconnect(); } catch (e) {}
+    }
+    rt = { pusher: null, channel: null, handoffId: null, connected: false };
+  }
+
+  function setRealtimeConnected(connected) {
+    if (rt.connected === connected) return;
+    rt.connected = connected;
+    if (connected) {
+      clearTimeout(handoffTimer);   // stop polling...
+      pollHandoff();                // ...after one catch-up fetch
+    } else {
+      scheduleFallbackPoll();       // socket down: poll until it is back
     }
   }
 
@@ -1081,6 +1164,7 @@
 
         if (data.mode === 'human') {
           // Transferred to / already with customer support.
+          if (data.realtime !== undefined) realtimeConfig = data.realtime;
           if (data.answer) appendMessage('bot', data.answer);
           const wasActive = !!handoff;
           setHandoff(data.handoff);
