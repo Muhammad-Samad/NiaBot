@@ -5,6 +5,10 @@ GET /api/handoff/updates?sid=&ct=&device_id=&handoff_id=&after_id=
     (and once on page load). Returns the handoff status (queue position /
     agent name) and agent/system messages newer than after_id.
 
+POST /api/handoff/read      (json: sid, ct, device_id, handoff_id, last_id)
+    The customer has the agent's messages on screen up to last_id: the
+    agent sees "Seen" on their replies (sent only while the widget is visible).
+
 POST /api/handoff/ws-auth   (form: socket_id, channel_name, sid, ct, device_id)
     Reverb private-channel authorization for the widget's socket: the
     customer may only listen on private-handoff.{id} of their own handoff.
@@ -46,6 +50,32 @@ def updates():
     except Exception as e:
         logger.error(f"Handoff updates failed (sid={sid}): {e}")
         return jsonify({"active": False, "handoff": None, "messages": [], "error": "unavailable"}), 503
+
+
+@handoff_bp.route("/read", methods=["POST"])
+def read():
+    data = request.get_json(silent=True) or {}
+    sid = (data.get("sid") or "").strip()
+    try:
+        handoff_id = int(data.get("handoff_id") or 0)
+        last_id = int(data.get("last_id") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid parameters"}), 400
+    if not sid or handoff_id <= 0 or last_id <= 0:
+        return jsonify({"error": "Invalid parameters"}), 400
+    if not service.enabled():
+        return jsonify({"updated": False})
+
+    customer_key = memory_service.resolve_customer_key(data.get("device_id"), data.get("ct"))
+    customer_id = memory_service.customer_id_from_key(customer_key)
+    try:
+        updated = service.mark_read(handoff_id, sid, customer_id, last_id)
+    except Exception as e:
+        logger.error(f"Handoff read failed (sid={sid}): {e}")
+        return jsonify({"error": "unavailable"}), 503
+    if updated is None:
+        return jsonify({"error": "Forbidden"}), 403
+    return jsonify({"updated": updated})
 
 
 @handoff_bp.route("/ws-auth", methods=["POST"])

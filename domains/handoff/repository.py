@@ -134,6 +134,24 @@ def touch_customer_message(handoff_id: int):
         cur.close()
 
 
+def mark_customer_read(handoff_id: int, last_id: int) -> bool:
+    """Moves customer_last_read_id forward to last_id - never backwards and
+    never past the handoff's newest message. True when it moved."""
+    with DatabaseManager() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """UPDATE ncb_handoff_conversations h
+               JOIN (SELECT MAX(id) AS newest FROM ncb_conversation_messages WHERE handoff_id = %s) m
+               SET h.customer_last_read_id = LEAST(%s, m.newest)
+               WHERE h.id = %s AND COALESCE(h.customer_last_read_id, 0) < LEAST(%s, m.newest)""",
+            (handoff_id, last_id, handoff_id, last_id),
+        )
+        moved = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+    return moved
+
+
 def queue_position(handoff: dict) -> int | None:
     """1-based position in the waiting queue (oldest first), None when not waiting."""
     if not handoff or handoff.get("status") != "waiting":

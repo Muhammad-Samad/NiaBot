@@ -288,6 +288,13 @@
     background: var(--accent-green); animation: handoffPulse 1.4s ease-in-out infinite;
   }
   @keyframes handoffPulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  .handoff-banner .live { margin-left: auto; font-size: 11px; font-weight: 700; }
+  /* Sent / seen ticks on the customer's messages and "Agent is typing…" -
+     only shown over a live socket (#messages.rt-live), never while polling. */
+  .receipt { display: block; text-align: right; font-size: 11px; line-height: 1; margin-top: 3px; opacity: .75; }
+  .receipt.seen { color: #7dd3fc; opacity: 1; }
+  #messages:not(.rt-live) .receipt,
+  #messages:not(.rt-live) #agent-typing { display: none; }
 
   /* Clickable numbered options inside a bot bubble (same look as the
      welcome menu). Once the user answers, the list is locked and the
@@ -651,7 +658,7 @@
 
     <!-- Shown while the chat is with Naheed Customer Support (queue / agent) -->
     <div class="handoff-banner" id="handoff-banner" role="status" hidden>
-      <span class="dot"></span><span id="handoff-banner-text"></span>
+      <span class="dot"></span><span id="handoff-banner-text"></span><span class="live" id="handoff-live" hidden>● Live</span>
     </div>
 
     <div class="input-bar">
@@ -969,6 +976,71 @@
   let realtimeConfig = null; // {key, host, port, scheme} from the server, null = poll only
   let rt = { pusher: null, channel: null, handoffId: null, connected: false };
 
+  // Sent / seen ticks and typing (live socket only, see .rt-live).
+  const TYPING_SEND_EVERY_MS = 2000;
+  const TYPING_HIDE_AFTER_MS = 4000;
+  const myHandoffBubbles = new Map();   // message id -> receipt element of the customer's own messages
+  let agentReadId = 0;                  // newest message id the agent has seen
+  let readSentId = 0;                   // newest support message id reported as read
+  let typingLastSentAt = 0;
+  let agentTypingTimer = null;
+
+  function setReceipt(el, state) {
+    el.className = 'receipt' + (state === 'seen' ? ' seen' : '');
+    el.textContent = state === 'pending' ? '🕓' : state === 'seen' ? '✓✓' : '✓';
+    el.title = state === 'pending' ? 'Sending' : state === 'seen' ? 'Seen' : 'Sent';
+  }
+
+  function setAgentReadId(id) {
+    agentReadId = Math.max(agentReadId, Number(id) || 0);
+    myHandoffBubbles.forEach((el, mid) => { if (mid <= agentReadId) setReceipt(el, 'seen'); });
+  }
+
+  // Tells the agent "Seen" - only while this chat is really on screen.
+  function markSupportRead() {
+    if (!handoff || handoff.status !== 'open' || document.visibilityState !== 'visible') return;
+    if (lastSupportId <= readSentId) return;
+    readSentId = lastSupportId;
+    const body = { sid: sessionId, device_id: deviceId, handoff_id: handoff.id, last_id: lastSupportId };
+    if (customerToken) body.ct = customerToken;
+    fetch('/api/handoff/read', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).catch(() => { readSentId = 0; });
+  }
+  document.addEventListener('visibilitychange', markSupportRead);
+
+  function showAgentTyping() {
+    const msgs = document.getElementById('messages');
+    let row = document.getElementById('agent-typing');
+    if (!row) {
+      row = document.createElement('div');
+      row.className = 'msg-row bot';
+      row.id = 'agent-typing';
+      row.innerHTML = `<div class="avatar agent">🎧</div><div class="bubble agent typing"></div>`;
+      msgs.appendChild(row);
+      msgs.scrollTop = msgs.scrollHeight;
+    }
+    row.querySelector('.bubble').textContent = `${(handoff && handoff.agent_name) || 'The agent'} is typing…`;
+    clearTimeout(agentTypingTimer);
+    agentTypingTimer = setTimeout(hideAgentTyping, TYPING_HIDE_AFTER_MS);
+  }
+
+  function hideAgentTyping() {
+    clearTimeout(agentTypingTimer);
+    document.getElementById('agent-typing')?.remove();
+  }
+
+  function sendTyping(isTyping) {
+    if (!handoff || handoff.status !== 'open' || !rt.connected || !rt.channel || !rt.channel.subscribed) return;
+    const now = Date.now();
+    if (isTyping && now - typingLastSentAt < TYPING_SEND_EVERY_MS) return;
+    typingLastSentAt = isTyping ? now : 0;
+    rt.channel.trigger('client-typing', { typing: isTyping });
+  }
+  document.getElementById('user-input').addEventListener('input', function () {
+    sendTyping(this.value.trim() !== '');
+  });
+
   function appendSupportMessage(role, text, agentName) {
     const welcome = document.getElementById('welcome');
     if (welcome) welcome.remove();
@@ -992,6 +1064,7 @@
     if (!m || shownSupportIds.has(m.id)) return;
     shownSupportIds.add(m.id);
     lastSupportId = Math.max(lastSupportId, m.id || 0);
+    if (m.role === 'agent') hideAgentTyping();
     appendSupportMessage(m.role, m.message, m.agent_name);
   }
 
@@ -1011,7 +1084,14 @@
   }
 
   function setHandoff(h) {
-    handoff = h && (h.status === 'waiting' || h.status === 'open') ? h : null;
+    const next = h && (h.status === 'waiting' || h.status === 'open') ? h : null;
+    if (!next || !handoff || next.id !== handoff.id) {
+      // Another (or no) handoff: read pointers start over.
+      agentReadId = 0;
+      readSentId = 0;
+      hideAgentTyping();
+    }
+    handoff = next;
     renderHandoffBanner();
     document.getElementById('user-input').placeholder = handoff
       ? 'Type your message to Naheed Customer Support…' : DEFAULT_PLACEHOLDER;
@@ -1045,6 +1125,8 @@
       (data.messages || []).forEach(addSupportMessage);
       if (data.active && data.handoff) {
         setHandoff(data.handoff);
+        setAgentReadId(data.handoff.agent_last_read_id);
+        markSupportRead();
       } else if (trackedId) {
         setHandoff(null);   // closed by the agent: NiaBot answers again
       }
@@ -1094,6 +1176,7 @@
     channel.bind('pusher:subscription_succeeded', () => setRealtimeConnected(pusher.connection.state === 'connected'));
     channel.bind('pusher:subscription_error', () => setRealtimeConnected(false));
     channel.bind('handoff.updated', () => pollHandoff());   // signal -> fetch the change
+    channel.bind('client-typing', data => { if (data && data.typing === false) hideAgentTyping(); else showAgentTyping(); });
     pusher.connection.bind('state_change', states => {
       if (states.current !== 'connected') setRealtimeConnected(false);
       else if (channel.subscribed) setRealtimeConnected(true);
@@ -1107,11 +1190,19 @@
       try { rt.pusher.disconnect(); } catch (e) {}
     }
     rt = { pusher: null, channel: null, handoffId: null, connected: false };
+    renderLive();
+  }
+
+  function renderLive() {
+    document.getElementById('messages').classList.toggle('rt-live', rt.connected);
+    document.getElementById('handoff-live').hidden = !rt.connected;
+    if (!rt.connected) hideAgentTyping();
   }
 
   function setRealtimeConnected(connected) {
     if (rt.connected === connected) return;
     rt.connected = connected;
+    renderLive();
     if (connected) {
       clearTimeout(handoffTimer);   // stop polling...
       pollHandoff();                // ...after one catch-up fetch
@@ -1122,7 +1213,15 @@
 
   // ─── Send a chat message (shared by typed messages and image uploads) ─────
   async function postChatMessage(rawText, displayText) {
-    appendMessage('user', displayText);
+    const userBubble = appendMessage('user', displayText);
+    // To customer support: clock until saved, then ✓ (sent) and ✓✓ (seen).
+    let receipt = null;
+    if (handoff) {
+      sendTyping(false);
+      receipt = document.createElement('span');
+      setReceipt(receipt, 'pending');
+      userBubble.appendChild(receipt);
+    }
 
     const msgs = document.getElementById('messages');
     // With a human agent there is no instant reply - no "NiaBot is typing".
@@ -1165,16 +1264,25 @@
         if (data.mode === 'human') {
           // Transferred to / already with customer support.
           if (data.realtime !== undefined) realtimeConfig = data.realtime;
+          if (receipt && data.message_id) {
+            myHandoffBubbles.set(Number(data.message_id), receipt);
+            setReceipt(receipt, Number(data.message_id) <= agentReadId ? 'seen' : 'sent');
+          } else {
+            receipt?.remove();
+          }
           if (data.answer) appendMessage('bot', data.answer);
           const wasActive = !!handoff;
           setHandoff(data.handoff);
           if (!wasActive) pollHandoff();   // pick up "agent joined" at once
         } else {
+          receipt?.remove();
           if (handoff) setHandoff(null);
           appendMessage('bot', data.answer, data.products);
         }
       }
+      if (data.error) receipt?.remove();
     } catch (err) {
+      receipt?.remove();
       document.getElementById('typing')?.remove();
       appendMessage('bot', '⚠️ Network error. Please try again.');
     } finally {

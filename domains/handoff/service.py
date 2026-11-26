@@ -107,7 +107,7 @@ def start(sid: str, conversation_id: str, customer_key: str | None, customer_id:
 
 def customer_message(handoff: dict, sid: str, conversation_id: str, user_msg: str, customer_id: int | None) -> dict:
     """The AI stays silent while a human owns the conversation."""
-    chat_repository.save_conversation_message(
+    message_id = chat_repository.save_conversation_message(
         sid, conversation_id, "user", user_msg, domain=DOMAIN, customer_id=customer_id, handoff_id=handoff["id"],
     )
     repository.touch_customer_message(handoff["id"])
@@ -122,7 +122,10 @@ def customer_message(handoff: dict, sid: str, conversation_id: str, user_msg: st
             ),
             daemon=True,
         ).start()
-    return _response("", sid, conversation_id, handoff["id"], _state_of(handoff))
+    response = _response("", sid, conversation_id, handoff["id"], _state_of(handoff))
+    # The widget turns the customer's bubble from "sending" into "sent" (✓).
+    response["message_id"] = message_id
+    return response
 
 
 def updates(sid: str, customer_id: int | None, handoff_id: int | None, after_id: int) -> dict:
@@ -141,10 +144,39 @@ def updates(sid: str, customer_id: int | None, handoff_id: int | None, after_id:
     state = _state_of(handoff)
     return {
         "active": state["status"] in ("waiting", "open"),
-        "handoff": {"id": handoff["id"], **state, "poll_ms": POLL_INTERVAL_MS},
+        "handoff": {
+            "id": handoff["id"],
+            **state,
+            "poll_ms": POLL_INTERVAL_MS,
+            # Newest message id the agent has on screen: customer bubbles up to it show "Seen".
+            "agent_last_read_id": int(handoff.get("agent_last_read_id") or 0),
+        },
         "messages": repository.support_messages_after(handoff["id"], max(0, int(after_id or 0))),
         "realtime": realtime.client_config(),
     }
+
+
+def mark_read(handoff_id: int, sid: str, customer_id: int | None, last_id: int) -> bool | None:
+    """The customer has the agent's messages on screen up to last_id. Moves
+    customer_last_read_id forward and tells the agent's screen ("Seen").
+    Returns None when the handoff is not this customer's, else whether the
+    pointer moved."""
+    handoff = repository.get_by_id(handoff_id)
+    if not handoff or not _owned_by(handoff, sid, customer_id):
+        return None
+    if handoff.get("status") != "open":
+        return False
+    moved = repository.mark_customer_read(handoff_id, last_id)
+    if moved and handoff.get("agent_id"):
+        threading.Thread(
+            target=realtime.publish,
+            args=(
+                [realtime.agent_channel(handoff["agent_id"])],
+                {"handoff_id": handoff_id, "type": "read", "status": handoff.get("status")},
+            ),
+            daemon=True,
+        ).start()
+    return moved
 
 
 def can_access(handoff_id: int, sid: str, customer_id: int | None) -> bool:

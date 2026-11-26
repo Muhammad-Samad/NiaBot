@@ -62,7 +62,10 @@ def save_conversation_message(sid, ts_conversation_id, role, message, products=N
     policy / menu / handoff); `customer_id` the verified numeric customer id
     or None; `handoff_id` links the turn to a human-support handoff
     (domains/handoff) - the column only exists once naheedopsv2's migrations
-    ran, so it is only written when set."""
+    ran, so it is only written when set.
+
+    Returns the new row id (the handoff widget uses it for sent/seen ticks),
+    or None when the write failed."""
     columns = ["session_id", "ts_conversation_id", "customer_id", "role", "message",
                "products_json", "cart_action_json", "domain"]
     values = [
@@ -86,12 +89,15 @@ def save_conversation_message(sid, ts_conversation_id, role, message, products=N
                     VALUES ({", ".join(["%s"] * len(columns))})""",
                 tuple(values),
             )
+            message_id = cur.lastrowid
             conn.commit()
             cur.close()
+        return message_id
     except Exception as e:
         # Logging is best-effort — never let a history-write failure break the
         # actual chat response the user is waiting on.
         logger.error(f"Failed to save conversation message for session {sid}: {e}")
+        return None
 
 
 def session_owner(sid):

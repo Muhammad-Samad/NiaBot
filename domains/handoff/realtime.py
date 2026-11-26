@@ -15,7 +15,13 @@ Event contract (shared with naheedopsv2's App\\Events\\CsrChat\\HandoffUpdated):
   name     handoff.updated
   channels private-handoff.{handoff_id}   customer widget
            private-csr.agent.{agent_id}   assigned agent
-  data     {"handoff_id", "type": "message"|"status", "status"}
+  data     {"handoff_id", "type": "message"|"status"|"read", "status"}
+           ("read": a seen pointer moved - the other side refetches it)
+
+Client events (whispers, browser to browser through Reverb, no server code):
+  client-typing {"typing": bool} on private-handoff.{id} - sent by the
+  customer widget and by the assigned agent, who joins that channel too
+  (authorized by naheedopsv2's routes/channels.php).
 """
 
 import hashlib
